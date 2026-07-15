@@ -1,0 +1,22 @@
+28-03-2024
+	direi che funziona
+
+01-10-2023
+	gestisce il link tra due moduli da 4 ingressi e 4 uscite
+	Lo stato dei 4 ingressi di una unità vengono replicati sulle 4 uscite del modulo con lo stesso ID
+	per configurarli collegarsi al loro AccessPoint SSID=mac address PWD=87654321 IP=192.168.100.1
+
+	Confifurazione WiFi:
+		possono essere collegati tramite accesspoint esterno
+		oppure uno dei due fa da server e l'altro si collega all'accesspoint di questo (no accesspoint esterni)
+
+
+	Configurazione unità:
+		all'unità deve essere assegnato un id che deve essere uguale a quello dell'altro modulo
+		è stato inserito un campo descrittivo 'Location' per facilitare l'individuazione delle unità
+
+22-07-2023
+	Contiene solo MyWiFi funzionante
+	Si compila
+	Ci si collega all AP
+	devo gestire le pagine di configurazione

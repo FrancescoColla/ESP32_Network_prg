@@ -1,0 +1,15 @@
+{
+    "C_Cpp.errorSquiggles": "disabled",
+    "files.associations": {
+        "string_view": "cpp",
+        "functional": "cpp",
+        "memory": "cpp",
+        "type_traits": "cpp",
+        "cmath": "cpp",
+        "limits": "cpp",
+        "new": "cpp",
+        "tuple": "cpp",
+        "utility": "cpp"
+    },
+    "cmake.options.statusBarVisibility": "visible"
+}
