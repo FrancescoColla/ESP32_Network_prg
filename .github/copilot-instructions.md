@@ -1,0 +1,4 @@
+- Questo è un progetto Arduino/ESP32.
+- I pacchetti UDP devono sempre includere il terminatore nullo `\0` (+1 sulla lunghezza della stringa).
+- Preferisci la stabilità e la compatibilità con i vecchi puntatori C rispetto all'ottimizzazione teorica del C++ moderno.
+- Non modificare i nomi delle variabili globali (es. strRX, Board_Config) a meno che non sia esplicitamente richiesto.

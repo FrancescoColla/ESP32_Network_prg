@@ -1,0 +1,1697 @@
+/*
+  Documentazione in drive
+  D:\Lavori\Arduino\ESP32_Network\pio
+  Derivata da Easy_Bridge
+  La configurazione della WiFi SSID è getsita via HTTP
+  la configurazione degli ingressi e uscite è gestita da app fatta con mit app inventor
+//
+*/
+// ctrl K + ctrl 0 (fold)
+#pragma region Links
+//*******************************************************
+// https://cplusplus.com/doc/tutorial/classes/
+//*******************************************************
+
+// https://www.dpss.inesc-id.pt/~romanop/files/FI/puntatori.pdf
+// https://cpp4arduino.com/2018/11/21/eight-tips-to-use-the-string-class-efficiently.html
+// https://www.html.it/pag/15509/i-puntatori1/                                                           Puntatori - Stack - Heap
+// https://github.com/G6EJD/ESP32-Using-Hardware-Serial-Ports/blob/master/ESP32_Using_Serial2.ino        SERIAL
+// https://circuits4you.com/2019/03/20/esp8266-receive-post-get-request-data-from-website/               interessante
+// https://randomnerdtutorials.com/esp32-esp8266-input-data-html-form/
+//
+// https://randomnerdtutorials.com/esp32-useful-wi-fi-functions-arduino/#2                               scansione WiFi
+// https://docs.google.com/document/d/1luMSi-QyJ5MvsGTPXvkx6cMSgEIdlXRnsFVSDKfx8js/edit?usp=share_link   mio documento per HTML
+
+// https://devices.esphome.io/devices/AC-DC-ESP32-Relay-x4#pinout
+#pragma endregion Links
+#pragma region Annotazioni
+/*
+    int a = 1;
+    int *ptr = &a; // si legge:     "assegna a ptr l'indirizzo di a"
+    int b = *ptr;  // si legge:     "assegna a b il valore puntato da ptr"
+
+    L'operatore & è usato per assegnare a ptr l'indirizzo di a, e l'operatore * è usato per
+    assegnare a b il valore puntato da ptr, che è contenuto in a. Quest'ultima istruzione ha lo
+    stesso effetto che produrrebbe l'istruzione:
+    int b = a;
+    --------------------------------------------------------------------
+    Confrontare queste due dichiarazioni di funzione:
+
+    void passByValue(String s);
+    void passByRef(const String& s);
+    Possiamo chiamare entrambe le funzioni con un'istanza, ma la prima riceve una copia,
+    mentre la seconda riceve un riferimento all'originale.String
+
+    Il passaggio di oggetti per riferimento è molto più efficiente rispetto al passaggio per valore;
+    Ci sono pochissime eccezioni a questa regola.
+    --------------------------------------------------------------------
+    Copying :
+    memcpy 2 Copy block of memory (function )
+    memmove 1 Move block of memory (function )
+    strcpy 2 Copy string (function )
+    strncpy 3 Copy characters from string (function )
+
+    Concatenation :
+    strcat 4 Concatenate strings (function )
+    strncat 4 Append characters from string (function )
+
+    Comparison :
+    memcmp 3 Compare two blocks of memory (function )
+    strcmp 20 Compare two strings (function )
+    strcoll Compare two strings using locale (function )
+    strncmp 8 Compare characters of two strings (function )
+    strxfrm Transform string using locale (function )
+
+    Searching :
+    memchr 3 Locate character in block of memory (function )
+    strchr 2 Locate first occurrence of character in string (function )
+    strcspn Get span until character in string (function )
+    strpbrk Locate characters in string (function )
+    strrchr Locate last occurrence of character in string (function )
+    strspn Get span of character set in string (function )
+    strstr 3 Locate substring (function )
+    strtok Split string into tokens (function )
+
+    Other :
+    memset 1 Fill block of memory (function )
+    strerror Get pointer to error message string (function )
+    strlen 1 Get string length (function )
+*/
+
+/*
+    and             &&
+    and_eq          &=
+    bitand          &
+    bitor           |
+    not             !
+    not_eq          !=
+    or              ||
+    or_eq           |=
+    xor             ^
+    xor_eq          ^=
+*/
+/*
+    strcpy(p0, "    Access Point");
+    strcat(p0, _MyWiFi.AP_PWD());
+    String(Impianto.Stanze_Count).toCharArray(p0,20,7);
+    String((Impianto.Stanze[stanza].On) ? "< ON >" : "< OFF >").toCharArray(p0,20,8);
+
+    char t[16];
+    ArraySize = sizeof(t)/(sizeof(t[0]);
+    Caracters = strlen(t)
+*/
+
+#pragma endregion
+
+#pragma region Include Library
+#include <Arduino.h>
+#include <MyWiFi.hpp>
+#include <WiFiUdp.h>
+#include <EEPROM.h>
+#include <BluetoothSerial.h>
+#include <Bit_Utils.h>
+#include <WebServer.h>
+#pragma endregion Include
+
+static const uint16_t HTTP_SERVER_PORT = 80;
+static const size_t MAX_LOG_BUFFER_SIZE = 2048;
+static const size_t UDP_WORK_RX_SIZE = 128;
+static const size_t UDP_SETUP_RX_SIZE = 640;
+static const size_t UDP_TX_BUFFER_SIZE = 640;
+
+WebServer server(HTTP_SERVER_PORT);
+
+//---------- Log
+String logs;                             // Stringa per accumulare i log
+void log_add(const String &NewLog){
+  Serial.print(NewLog);
+  logs += NewLog;
+  if (logs.length() > MAX_LOG_BUFFER_SIZE) {
+      logs = logs.substring(logs.length() - MAX_LOG_BUFFER_SIZE);
+  }
+}
+
+#pragma region Variable Declaration
+//---------- [COSTANTI]
+const int16_t IX_COUNT = 10;
+const int16_t QX_COUNT = 4;
+
+const uint16_t QX_TYPE_TOGGLE = 1;
+const uint16_t QX_TYPE_REPLICATE = 2;
+const uint16_t QX_TYPE_REPLICATE_NEGATE = 3;
+
+// const uint8_t internal_LED = GPIO_NUM_14;
+//---------- ESP32
+/*
+  deve sapere:
+  - come si chiamano le uscite collegate agli ingressi corto e lungo)
+  - come si chiamano le proprie uscite
+*/
+struct struct_in_config
+{
+  bool disable_time_analisis = false; // disabilita valutazione 100ms, 800ms, 5000ms, 10000ms
+  bool internal_pullup = true;
+  int16_t noise = 0;
+  char qx_short[20] = "\0";
+  char qx_long[20] = "\0";
+};
+
+struct struct_out_config
+{
+  bool All_ON_OFF_Member = true;
+  int16_t type = 1;
+  unsigned long timeout = 0;
+  char qx_name[20] = "\0";
+};
+
+struct struct_Board_config
+{
+  char myname[20] = "\0";
+  char location[30] = "\0";
+  struct_in_config ix[IX_COUNT];
+  struct_out_config qx[QX_COUNT];
+  int16_t boardVersion = 4;
+  int DHCP = 0;
+  char IP[16];
+} Board_Config;
+
+//---------- LOOP
+ulong time_wifi = 0;
+ulong time_udp_work = 0;
+ulong time_udp_setup = 0;
+
+//---------- WiFi
+bool wifi_started = false;
+ulong time_wifi_millis_last_try = 0;
+MyWiFi _WiFi;
+
+char _soft_ap_password[31] = "87654321";
+
+
+
+struct struct_WiFi_Parameters
+{
+  char SSID[31] = ""; //"TP-Link_FEEA";
+  char PWD[31] = "";  //"87010268";
+} WiFi_Parameters;
+
+stBool wifi_is_conneted;
+
+//---------- HTTP
+
+//---------- UDP
+WiFiUDP udp_setup;
+WiFiUDP udp_work;
+const uint16_t udp_work_port = 54324;
+const uint16_t udp_setup_port = 54323;
+
+uint8_t udp_work_data_tx[UDP_TX_BUFFER_SIZE];
+char udp_work_data_rx[UDP_WORK_RX_SIZE];
+
+uint8_t udp_setup_data_tx[UDP_TX_BUFFER_SIZE];
+char udp_setup_data_rx[UDP_SETUP_RX_SIZE];
+
+ulong time_last_QState_Sended = 0;
+ulong restart_at = 0;
+bool restart_requested = false;
+
+//---------- EEPROM
+int16_t eeprom_initialized = 0;
+
+//---------- RELAY
+struct struct_IO_Q
+{
+  int16_t q;
+  unsigned long TimeSwichedON = 0;
+};
+struct_IO_Q io_q[4];
+// int16_t   io_q[4] = {GPIO_NUM_32, GPIO_NUM_33, GPIO_NUM_25, GPIO_NUM_26}; //    4 Relay
+int16_t io_i[10] = {GPIO_NUM_13, GPIO_NUM_14, GPIO_NUM_15, GPIO_NUM_16, GPIO_NUM_17, GPIO_NUM_18, GPIO_NUM_19, GPIO_NUM_21, GPIO_NUM_22, GPIO_NUM_23};
+//                                                          ^ cambia ^
+stBool ix[10];
+#pragma endregion Variable Declaration
+
+void EEPROM_Read();
+
+static bool validStaticIP(const char *ip_str, IPAddress &out)
+{
+  if (ip_str == nullptr || ip_str[0] == '\0') {
+    return false;
+  }
+  return out.fromString(ip_str);
+}
+
+void gpioConfig()
+{
+  io_q[1].q = GPIO_NUM_33;
+  io_q[2].q = GPIO_NUM_25;
+  io_q[3].q = GPIO_NUM_26;
+
+  switch (Board_Config.boardVersion)
+  {
+  case 1:
+    io_q[0].q = GPIO_NUM_16;
+    io_i[3] = GPIO_NUM_27;
+    break;
+
+  case 2:
+    break;
+
+  case 3:
+    break;
+
+  case 4:
+    io_q[0].q = GPIO_NUM_32;
+    io_i[3] = GPIO_NUM_16;
+    break;
+
+  default:
+    break;
+  }
+
+  for (size_t i = 0; i < QX_COUNT; i++)
+  {
+    pinMode(io_q[i].q, OUTPUT);
+  }
+  for (size_t i = 0; i < IX_COUNT; i++)
+  {
+    log_add("Input: ");
+    if (Board_Config.ix[i].internal_pullup == 1)
+    {
+      log_add("PullUP\n");
+      pinMode(io_i[i], INPUT_PULLUP);
+    }
+    else
+    {
+      log_add("\n");
+      pinMode(io_i[i], INPUT);
+    }
+  }
+}
+
+#pragma region EEPROM
+void EEPROM_Write()
+{
+  log_add("EEPROM_Write\n");
+  int16_t p = 0;
+  eeprom_initialized = 852;
+  EEPROM.writeInt(p, eeprom_initialized);
+  p = p + sizeof eeprom_initialized;
+  // Serial.print("p WiFi_Parameters: ");
+  // Serial.println(p);
+  EEPROM.put(p, WiFi_Parameters);
+  p = p + sizeof WiFi_Parameters;
+  // Serial.print("p IO_Config: ");
+  // Serial.println(p);
+  EEPROM.put(p, Board_Config);
+
+  // Serial.println("EPROM_Write ...");
+  // Serial.println(WiFi_Parameters.SSID);
+  // Serial.println(WiFi_Parameters.PWD);
+  EEPROM.commit();
+  EEPROM_Read();
+}
+
+void EEPROM_Read()
+{
+  eeprom_initialized = EEPROM.readInt(0);
+
+  if (eeprom_initialized == 852)
+  {
+    log_add("EEPROM_Read\n");
+    int16_t p = 0;
+    p = p + sizeof eeprom_initialized;
+    // Serial.print("p WiFi_Parameters: ");
+    // Serial.println(p);
+    EEPROM.get(p, WiFi_Parameters);
+    p = p + sizeof WiFi_Parameters;
+    // Serial.print("p IO_Config: ");
+    // Serial.println(p);
+    EEPROM.get(p, Board_Config);
+    if (Board_Config.boardVersion < 1)
+    {
+      Board_Config.boardVersion = 4;
+    }
+
+    // Serial.println("EEPROM letta!!");delay(500);
+
+    // è capitato che i dati nella eeprom fossero corrotti
+    int nsize = sizeof(Board_Config.ix[0].qx_short);
+    int nlen = strnlen(Board_Config.ix[0].qx_short, nsize);
+    if (nlen >= nsize)
+    {
+      Serial.println("EEProm_Error");
+      for (int16_t i = 0; i < IX_COUNT; i++)
+      {
+        Board_Config.ix[i].qx_long[0] = '\0';
+        Board_Config.ix[i].qx_short[0] = '\0';
+      }
+      for (size_t i = 0; i < QX_COUNT; i++)
+      {
+        Board_Config.qx[i].qx_name[0] = '\0';
+      }
+
+      EEPROM_Write();
+    }
+  }
+  else
+  {
+    WiFi_Parameters.SSID[0] = 0;
+    WiFi_Parameters.PWD[0] = 0;
+    EEPROM_Write();
+  }
+}
+#pragma endregion EEPROM
+
+#pragma region HTTP
+
+  #pragma region HTTP_Events_Pages
+    void HTTP_Event_Reset()
+    {
+      String ToSend =
+          "<!DOCTYPE html>\n"
+          "<html>\n"
+          "<body style=\"font-size:30px;\">\n"
+          "<h1 style=\"font-size:60px;\">ESP2_Network</h1>\n"
+          "<br/>\n"
+          "<br/>\n"
+          "<br/>\n"
+          "<h2>Reset unita' tra 10 secondi\n"
+          "<br/>\n"
+          "La connessione sara' interrotta e bisognera' ricollegarsi</h2>\n"
+          "</body>\n"
+          "</html>\n";
+      server.send(200, "text/html", ToSend);
+      restart_requested = true;
+      restart_at = millis() + 10000;
+    }
+
+    void HTTP_Event_Connected()
+    {
+    String HTML = 
+      "<!DOCTYPE html>\n"
+      "<html>\n"
+      "<head>\n"
+      "<meta http-equiv=\"refresh\" content=\"10\">\n"
+      "<style>\n"
+      ".My_buttonstyle {\n"
+      "  border: none;\n"
+      "  color: white;\n"
+      "  padding: 20px 32px;\n"
+      "  text-align: center;\n"
+      "  text-decoration: none;\n"
+      "  display: inline-block;\n"
+      "  font-size: 50px;\n"
+      "  margin: 4px 2px;\n"
+      "  cursor: pointer;\n"
+      "  border-radius: 8px;\n"
+      "  width: 60%;\n"
+      "  display: block;\n"
+      "  -ms-transform: translateY(-50%);\n"
+      "  transform: translateY(-50%);\n"
+      "}\n"
+      
+      /* BUTTON_1 */
+      ".button1 {\n"
+      "  background-color: #4CAF50;\n"
+      "  margin: 0;\n"
+      "  position: absolute;\n"
+      "  top: 55%;\n"
+      "  left: 20%;\n"
+      "}\n"
+      ".button1:active {background-color: #2980b9;}\n"
+
+      /* BUTTON_2 */
+      ".button2 {\n"
+      "  background-color: #008CBA;\n"
+      "  margin: 0;\n"
+      "  position: absolute;\n"
+      "  top: 65%;\n"
+      "  left: 20%;\n"
+      "}\n"
+      ".button2:active {background-color: #2980b9;}\n"
+
+      /* BUTTON_3 */
+      ".button3 {\n"
+      "  background-color: #008CBA;\n"
+      "  margin: 0;\n"
+      "  position: absolute;\n"
+      "  top: 75%;\n"
+      "  left: 20%;\n"
+      "}\n"
+      ".button3:active {background-color: #2980b9;}\n"
+
+      /* BUTTON_4 */
+      ".button4 {\n"
+      "  background-color: #008CBA;\n"
+      "  margin: 0;\n"
+      "  position: absolute;\n"
+      "  top: 85%;\n"
+      "  left: 20%;\n"
+      "}\n"
+      ".button4:active {background-color: #2980b9;}\n"
+
+      "</style>\n"
+      "</head>\n"
+      "<body style=\"font-size:22px;\">\n"
+      "<h1 style=\"font-size:60px;\">ESP2_Network</h1>\n";
+
+    HTML += "<h2>";
+    HTML += _WiFi.AP_SSID(); 
+    HTML += " IP: ";
+    HTML += _WiFi.isConnected() ? _WiFi.LocalIP().toString() : "not connected";
+    HTML += "</h2>\n";
+
+    HTML += "<h2>Name:  [";
+    HTML += Board_Config.myname;
+    HTML += "]</h2>\n";
+
+    HTML += "<h2>Location:  [";
+    HTML += Board_Config.location;
+    HTML += "]</h2>\n";
+
+    HTML += "<h2>WiFi corrente:   ";
+    HTML += (strlen(WiFi_Parameters.SSID) ? WiFi_Parameters.SSID : "Non configurata!");
+    HTML += "<br>\n";
+
+    HTML += "<h2>Status: ";
+    HTML += _WiFi.Verbose_Status();
+    HTML += "</h2>\n";
+
+    // Aggiungi i pulsanti con i link
+    HTML += "<a class=\"My_buttonstyle button1\" href=\"/WiFi_Setup\">Configura WiFi</a>\n";
+    HTML += "<a class=\"My_buttonstyle button2\" href=\"/App_Setup\">Setup</a>\n";
+    HTML += "<a class=\"My_buttonstyle button3\" href=\"/ESP_reset\">Reset unità</a>\n";
+    HTML += "<a class=\"My_buttonstyle button4\" href=\"/logs\">Log</a>\n";
+
+    HTML += "</body>\n"
+            "</html>\n";
+
+    // Invia la risposta al client
+    server.send(200, "text/html", HTML);
+  }
+
+    void HTTP_Event_WiFi_Setup()
+    {
+      String ToSend =
+          "<!DOCTYPE html>\n"
+          "<html>\n"
+          "<head><meta http-equiv = \"refresh\" content = \"0; url = /WiFi_Setup_Scan\" /></head>\n"
+          "<body style=\"font-size:30px;\">\n"
+          "<h1 style=\"font-size:60px;\">ESP2_Network</h1>\n"
+          "<br/>\n"
+          "<br/>\n"
+          "<br/>\n"
+          "<h2>Ricerca reti WiFi accessibili\n"
+          "<br/>\n"
+          "Attendere il completamento della scansione .....</h2>\n"
+          "</body>\n"
+          "</html>\n";
+      server.send(200, "text/html", ToSend);
+    }
+
+    void HTTP_Event_WiFi_Setup_Scan()
+    {
+    String ToSend = R"rawliteral(
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <style>
+        .style_1 {
+          background-color: #4CAF50;
+          color: yellow;
+          padding: 20px 32px;
+          text-decoration: none;
+          font-size: 40px;
+          margin: 4px 60px;
+          border-radius: 8px;
+        }
+      </style>
+    </head>
+    <body style="font-size:20px;">
+      <h1 style="font-size:60px;">ESP2_Network</h1>
+      <br/>
+      <h1><p style="color:red">Seleziona la rete WiFi</p></h1>
+
+      <form action="/WiFi_Selected" method="get" id="form1">
+        <fieldset>
+          <legend>WiFi:</legend>
+          <div>
+      )rawliteral";
+
+      // Aggiunta dinamica delle reti WiFi
+      ToSend.concat(_WiFi.HTTP_AP_Networks());
+
+      ToSend.concat(R"rawliteral(
+            </div>
+          </fieldset>
+          <br /><br />
+
+          <p style="color:red">Password:</p>
+          <input type="password" id="password" name="pwd" style="font-size:40px;"/>
+
+          <br><br>
+
+          <a class="style_1" href="/">Cancel</a>
+          <button class="style_1" type="submit">Ok</button>
+          <a class="style_1" href="/WiFi_Server">Server</a>
+        </form>
+      </body>
+      </html>
+      )rawliteral");
+
+      // Log della pagina generata
+      log_add(ToSend + "\n");
+
+      // Invio della risposta HTTP
+
+      server.send(200, "text/html", ToSend);
+    }
+
+    void HTTP_Event_WiFi_Selected()
+    {
+      if (server.hasArg("wifi"))
+      {
+        String selWiFi = server.arg("wifi");
+        String password = server.hasArg("pwd") ? server.arg("pwd") : "";
+        selWiFi.toCharArray(WiFi_Parameters.SSID, selWiFi.length() + 1);
+        password.toCharArray(WiFi_Parameters.PWD, password.length() + 1);
+        EEPROM_Write();
+      }
+      HTTP_Event_Connected();
+    }
+
+    void HTTP_Event_WiFi_Server()
+    {
+      String str_void = "";
+      str_void.toCharArray(WiFi_Parameters.SSID, 1);
+      str_void.toCharArray(WiFi_Parameters.PWD, 1);
+      _WiFi.Disconnect();
+      EEPROM_Write();
+      HTTP_Event_Connected();
+    }
+
+    void HTTP_Event_App_Setup()
+    {
+
+      String modelType = String(Board_Config.boardVersion); 
+      String currentIP = Board_Config.IP; 
+      //bool dhcpEnabled = false;
+
+      String html = R"rawliteral(
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <title>App_Setup</title>
+          <style>
+            .space {
+              width: 20px;
+              height: auto;
+              display: inline-block;
+            }
+            .style_1 {
+              color: black;
+              padding: 20px 32px;
+              text-decoration: none;
+              font-size: 50px;
+              margin: 4px 2px;
+              border-radius: 8px;
+            }
+            .st_buttons {
+              background-color:#4CAF50;
+              color: yellow;
+            }
+          </style>
+        </head>
+        <body style="font-size:40px;">
+          <form action="/App_Setup_Change" method="post" id="form1">
+            <h1 style="font-size:60px;">ESP2_Network</h1>
+
+            <!-- Campo Name -->
+            <label for="UnitName">Name:<br>
+            <input class="style_1" name="UnitName" value=")rawliteral";
+            
+            html += Board_Config.myname;
+            
+            html += R"rawliteral(" type="text" id="UnitName" maxlength="19"><br><br>
+
+            <!-- Campo Location -->
+            <label for="Location">Location:<br>
+            <input class="style_1" name="Location" value=")rawliteral";
+            
+            html += Board_Config.location;
+
+            
+            html += R"rawliteral(" "FLOATING" type="text" id="Location" maxlength="29"><br><br>
+
+            <!-- Selezione modello -->
+            <label for="modeltype">Seleziona il modello: </label>
+            <select style="font-size:50px" name="ModelType" id="ModelType">
+          )rawliteral";
+
+          // Genera dinamicamente le opzioni del menu a tendina
+          for (int i = 1; i <= 4; i++) {
+            html += "<option value=\"" + String(i) + "\"";
+            if (String(i) == modelType) html += " selected"; // Seleziona il modello corrente
+            html += ">" + String(i) + " Relay</option>";
+          }
+
+          html += R"rawliteral(
+            </select><br><br>
+
+            <!-- Checkbox DHCP -->
+            <label for="dhcp">DHCP:</label>
+            <input type="checkbox" id="dhcp" name="dhcp"
+          )rawliteral";
+
+          // Seleziona il checkbox DHCP se dhcpEnabled è true
+          if (Board_Config.DHCP == 1) html += " checked";
+
+          html += R"rawliteral(
+            onchange="toggleIPAddress()"><br><br>
+
+            <!-- Campo IP Address -->
+            <label for="ip_address">IP Address:<br>
+            <input class="style_1" name="ip_address" value=")rawliteral";
+
+          // Aggiunge il valore dinamico dell'IP Address
+          html += currentIP;
+
+          html += R"rawliteral(" type="text" id="ip_address" maxlength="15"
+          )rawliteral";
+
+          // Disabilita il campo IP Address se DHCP è abilitato
+          if (Board_Config.DHCP) html += " disabled";
+
+          html += R"rawliteral(
+            ><br><br>
+
+            <!-- Pulsanti -->
+            <button class="style_1 st_buttons" type="submit">Ok</button>  
+            <div class="space"></div>
+            <a class="style_1 st_buttons" href="/">Cancel</a>
+          </form>
+
+          <script>
+            function toggleIPAddress() {
+              const ipField = document.getElementById('ip_address');
+              const dhcpChecked = document.getElementById('dhcp').checked;
+              ipField.disabled = dhcpChecked; // Disabilita se DHCP è selezionato
+            }
+          </script>
+        </body>
+        </html>
+        )rawliteral";
+
+      server.send(200, "text/html", html);
+    }
+    //submit
+
+
+    void HTTP_Event_App_Setup_Change()
+  {
+
+    bool updated = false;
+    if (server.hasArg("UnitName"))
+    {
+      server.arg("UnitName").toCharArray(Board_Config.myname, 20);
+      updated = true; // EEPROM_Write();
+    }
+    if (server.hasArg("Location"))
+    {
+      server.arg("Location").toCharArray(Board_Config.location, 20);
+      updated = true; // EEPROM_Write();
+    }
+    if (server.hasArg("ModelType"))
+    {
+      log_add("ModelTypeModelType_Changed\n");
+      Board_Config.boardVersion = server.arg("ModelType").toInt();
+      updated = true; // EEPROM_Write();
+      gpioConfig();
+    }
+    if (server.hasArg("dhcp"))
+    {
+      /*
+      log_add("dhcp_Changed:"); log_add(server.arg("dhcp"));log_add("\n");
+      Board_Config.DHCP = server.arg("dhcp") == "on" ? 1 : 0;
+      */
+      Board_Config.DHCP = 1;
+      updated = true; // EEPROM_Write();
+    }
+    else
+    {
+      Board_Config.DHCP = 0;
+      updated = true; // EEPROM_Write();
+    }
+    
+
+    if (server.hasArg("ip_address"))
+    {
+      log_add("ip_address_Changed\n");
+      server.arg("ip_address").toCharArray(Board_Config.IP,15);
+      updated = true; // EEPROM_Write();
+    }
+
+    if (updated)
+    {
+      EEPROM_Write();
+    }
+
+    
+    HTTP_Event_Connected();
+    
+  }
+
+    void HTTP_Event_App_Configured()
+    {
+      ;
+    }
+
+
+    #pragma region LOG
+      void handle_Logs_Root() {
+        String html = R"rawliteral(
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>ESP32 Logger</title>
+                <script>
+                    function fetchLogs() {
+                        fetch("/logs_data")
+                            .then(response => response.text())
+                            .then(data => {
+                                document.getElementById("logs").innerText = data;
+                            });
+                    }
+                    setInterval(fetchLogs, 1000); // Aggiorna ogni 1 secondo
+                </script>
+            </head>
+            <body>
+                <h1>ESP32 Logs</h1>
+                <pre id="logs">Loading...</pre>
+            </body>
+            </html>
+        )rawliteral";
+
+        server.send(200, "text/html", html);
+    }
+
+      void handle_Logs_Data() {
+        server.send(200, "text/plain", logs); // Invio dei log come testo normale
+    }
+
+    #pragma endregion LOG
+
+  #pragma endregion HTTP_Events_Pages
+
+  #pragma region HTTP_Events_Assign
+  void HTTP_Init_Events()
+    {
+      //server.on("/App_Setup_Change", HTTP_GET, [](AsyncWebServerRequest *request));
+      server.onNotFound(HTTP_Event_Connected);
+      server.on("/", HTTP_Event_Connected);
+      server.on("/WiFi_Setup", HTTP_Event_WiFi_Setup);
+      server.on("/WiFi_Setup_Scan", HTTP_Event_WiFi_Setup_Scan);
+      server.on("/WiFi_Selected", HTTP_Event_WiFi_Selected);
+      server.on("/WiFi_Server", HTTP_Event_WiFi_Server);
+      server.on("/App_Setup", HTTP_Event_App_Setup);
+      server.on("/App_Setup_Change", HTTP_Event_App_Setup_Change);
+      server.on("/ESP_reset", HTTP_Event_Reset);
+
+      server.on("/logs", handle_Logs_Root);     // Root per l'HTML
+      server.on("/logs_data", handle_Logs_Data); // Endpoint separato per i log
+
+    }
+  #pragma endregion HTTP_Events_Assign
+
+#pragma endregion HTTP
+
+#pragma region Varie
+  void Send_Out_Q_State(String Context){
+    time_last_QState_Sended = millis();
+    String MyOut = "<05&";
+    bool OutPresent = false;
+    for (size_t i = 0; i < QX_COUNT; i++)
+    {
+      if (strlen(Board_Config.qx[i].qx_name) > 0 && strcmp(Board_Config.qx[i].qx_name , "none") != 0)
+      {
+        if (OutPresent)
+        {
+          MyOut.concat("!");
+        }
+        OutPresent = true;
+        MyOut.concat(Board_Config.qx[i].qx_name);
+        MyOut.concat(";");
+        MyOut.concat(digitalRead(io_q[i].q));
+      }
+      
+    }
+    if (OutPresent)
+    {
+      MyOut.concat(">");
+      udp_setup.beginPacket(_WiFi.Broadcast_IP(), udp_setup_port);
+      udp_setup.write((const uint8_t *)MyOut.c_str(), MyOut.length());
+      udp_setup.endPacket();
+      log_add(Context);log_add(" ");
+      log_add("Ho inviato: ");
+      log_add(MyOut);
+      log_add("\n");
+    }
+
+  }
+#pragma endregion Varie
+
+#pragma region UDP_SETUP receive
+// https://www.alejandrowurts.com/projects/esp32-wifi-udp/
+
+void udp_setup_receive()
+{
+  int packet_size = udp_setup.parsePacket();
+
+  if (packet_size > 0)
+  {
+int readed = udp_setup.read(udp_setup_data_rx, UDP_SETUP_RX_SIZE);
+    log_add("Readed: ");
+    log_add(String(readed) + "\n");
+    if (readed > 0)
+    {
+      String strRX = "";
+      udp_setup_data_rx[readed] = '\0';
+      strRX = String(udp_setup_data_rx);
+      
+      log_add(String(millis()));
+      log_add(" ***** Full: ");
+      log_add(strRX + "\n");
+
+      int16_t indexCmdSep = strRX.indexOf("&");
+      
+      // Controllo di sicurezza minimo: deve esserci almeno il separatore '&'
+      if (indexCmdSep <= 1)
+      {
+        log_add("udp_setup_receive: malformed packet (missing &)\n");
+        return;
+      }
+      
+      // Estraiamo il comando (es. "save")
+      String strCMD = strRX.substring(1, indexCmdSep);
+      
+      // Gestione elastica del fine pacchetto (con o senza '>')
+      int16_t indexEnd = strRX.lastIndexOf(">");
+      String strPayload = "";
+      
+      if (indexEnd > indexCmdSep) 
+      {
+        // Se c'è il carattere '>', tagliamo lì
+        strPayload = strRX.substring(indexCmdSep + 1, indexEnd);
+      } 
+      else 
+      {
+        // Se il '>' manca (come nel tuo log), prendiamo tutto fino alla fine della stringa
+        // eliminando l'eventuale ultimo carattere spurio se necessario, 
+        // oppure prendendo tutto il resto:
+        strPayload = strRX.substring(indexCmdSep + 1);
+        
+        // Se l'ultimo carattere fosse un newline o roba simile, lo puliamo
+        if (strPayload.endsWith("\n") || strPayload.endsWith("\r")) {
+          strPayload = strPayload.substring(0, strPayload.length() - 1);
+        }
+      }
+
+      // Da qui in poi il codice continua con i vari: if (strCMD == "save") ...
+      /*
+      log_add("***** Comando: ");
+      log_add(strCMD + "\n");
+      log_add("udp_setup_receive: ");
+      log_add(udp_setup_data_rx);
+      log_add("#\n");
+      log_add("Len: ");
+      log_add(sizeof udp_setup_data_rx + "\n");
+      */
+
+    if (strCMD == "**" /*strcmp(udp_setup_data_rx,"<**&>") == 0*/) // richiesta discovery deve ritornare <01&MyName, Location, MyMAC>
+      {
+        char firstChar = _WiFi.macAddress().charAt(17);
+        int asciiValue = (int)firstChar;
+        randomSeed(asciiValue);
+        int delay_time = random(0,1000);
+        Serial.print("delay_time: ");
+        Serial.println(delay_time);
+        delay(delay_time);
+
+        // Creiamo la stringa di risposta
+        String tx = "<01&";
+        tx.concat(Board_Config.myname);
+        tx.concat(",");
+        tx.concat(Board_Config.location);
+        tx.concat(",");
+        tx.concat(_WiFi.macAddress());
+        tx.concat(",");
+        tx.concat(String(Board_Config.boardVersion));
+        tx.concat(">");
+
+        // Calcoliamo la lunghezza includendo il terminatore null '\0' (+1)
+        size_t lx = tx.length() + 1; 
+
+        udp_setup.beginPacket(udp_setup.remoteIP(), udp_setup_port);
+        // Inviamo includendo il carattere nullo finale
+        udp_setup.write((const uint8_t *)tx.c_str(), lx); 
+        udp_setup.endPacket();
+
+        // Ripristiniamo i log corretti così vedi esattamente cosa è partito
+        log_add("Ho inviato a ");
+        log_add(udp_setup.remoteIP().toString().c_str());
+        log_add(": ");
+        log_add(tx.c_str()); 
+        log_add("\n");
+      }
+
+if (strCMD == "??" /*strcmp(udp_setup_data_rx,"<??&>") == 0*/)
+      {
+        /*  richiesta data deve ritornare <02&ingressi|uscite>
+            ingresso1!ingresso2!..... enabled, noise, short, long
+            Uscita1!uscota2!...       enabled, name, type          */
+
+        String tx = "<02&";
+
+        for (size_t i = 0; i < IX_COUNT; i++)
+        {
+          tx.concat(Board_Config.ix[i].disable_time_analisis ? "1" : "0");
+          tx.concat(",");
+          tx.concat(Board_Config.ix[i].internal_pullup ? "1" : "0");
+          tx.concat(",");
+          tx.concat(Board_Config.ix[i].noise > 10 ? String(Board_Config.ix[i].noise) : "10");
+          tx.concat(",");
+          tx.concat(strlen(Board_Config.ix[i].qx_short) ? Board_Config.ix[i].qx_short : "none");
+          tx.concat(",");
+          tx.concat(strlen(Board_Config.ix[i].qx_long) ? Board_Config.ix[i].qx_long : "none");
+          if (i < IX_COUNT - 1)
+          {
+            tx.concat("!");
+          }
+        }
+        tx.concat("|");
+        for (size_t i = 0; i < QX_COUNT; i++)
+        {
+          tx.concat(Board_Config.qx[i].All_ON_OFF_Member ? "1" : "0");
+          tx.concat(",");
+          // Serial.print("Valore primo carattere: "); Serial.println(IO_Config.qx[i].qx_name[0], DEC);
+          if (int(Board_Config.qx[i].qx_name[0]) > 127)
+          {
+            Board_Config.qx[i].qx_name[0] = '\0';
+          }
+          tx.concat(strlen(Board_Config.qx[i].qx_name) ? Board_Config.qx[i].qx_name : "none");
+          tx.concat(",");
+          if (Board_Config.qx[i].type < 0 || Board_Config.qx[i].type > 3)
+          {
+            Board_Config.qx[i].type = 1;
+          }
+
+          tx.concat(String(Board_Config.qx[i].type));
+          tx.concat(",");
+          if (Board_Config.qx[i].timeout < 0)
+          {
+            Board_Config.qx[i].timeout = 0;
+          }
+          tx.concat(String(Board_Config.qx[i].timeout));
+          if (i < QX_COUNT - 1)
+          {
+            tx.concat("!");
+          }
+        }
+
+        tx.concat(">"); // Chiudiamo il pacchetto correttamente
+
+        // Calcoliamo la lunghezza includendo il terminatore '\0' (+ 1)
+        size_t lx = tx.length() + 1;
+
+        udp_setup.beginPacket(udp_setup.remoteIP(), udp_setup_port);
+        // Inviamo includendo il terminatore nullo
+        udp_setup.write((const uint8_t *)tx.c_str(), lx);
+        udp_setup.endPacket();
+
+        log_add("Ho inviato: ");
+        log_add(tx.c_str());
+        log_add("\n");
+      }
+
+if (strCMD == "save") // save&inputs|outputs     (enabled, noise, short, long!... | enabled, name, type!...)
+      {
+        log_add("SAVE\n");
+        
+        int16_t indexIOSep = strPayload.indexOf("|"); // indice separatore IO
+        if (indexIOSep < 0)
+        {
+          log_add("SAVE malformed payload\n");
+          return;
+        }
+
+        int16_t indexLeft_element = 0;
+        int16_t indexRight_element = indexLeft_element;
+        int16_t indexLeft_field = 0;
+        int16_t indexRight_field = 0;
+        String IO_element = "";
+        int16_t element_index = 0;
+
+        // ==========================================
+        // 1. LETTURA INGRESSI
+        // ==========================================
+        while (true) 
+        {
+          indexRight_element = strPayload.indexOf("!", indexLeft_element);
+          
+          if (indexRight_element > indexIOSep || indexRight_element < 0)
+          {
+            indexRight_element = indexIOSep;
+          }
+          
+          IO_element = strPayload.substring(indexLeft_element, indexRight_element);
+          Serial.print("In: "); Serial.println(IO_element);
+          
+          if (element_index < IX_COUNT && IO_element.length() > 0) 
+          {
+            indexLeft_field = 0;
+            
+            indexRight_field = IO_element.indexOf(",", indexLeft_field);
+            Board_Config.ix[element_index].disable_time_analisis = IO_element.substring(indexLeft_field, indexRight_field).toInt() > 0;
+            indexLeft_field = indexRight_field + 1;
+
+            indexRight_field = IO_element.indexOf(",", indexLeft_field);
+            Board_Config.ix[element_index].internal_pullup = IO_element.substring(indexLeft_field, indexRight_field).toInt() > 0;
+            indexLeft_field = indexRight_field + 1;
+
+            indexRight_field = IO_element.indexOf(",", indexLeft_field);
+            Board_Config.ix[element_index].noise = IO_element.substring(indexLeft_field, indexRight_field).toInt();
+            indexLeft_field = indexRight_field + 1;
+
+            indexRight_field = IO_element.indexOf(",", indexLeft_field);
+            IO_element.substring(indexLeft_field, indexRight_field).toCharArray(Board_Config.ix[element_index].qx_short, indexRight_field - indexLeft_field + 1);
+            indexLeft_field = indexRight_field + 1;
+
+            IO_element.substring(indexLeft_field).toCharArray(Board_Config.ix[element_index].qx_long, IO_element.length() - indexLeft_field + 1);
+          }
+
+          indexLeft_element = indexRight_element + 1;
+          if (indexLeft_element >= indexIOSep)
+          {
+            break; 
+          }
+
+          element_index++;
+        }
+
+        // ==========================================
+        // 2. LETTURA USCITE
+        // ==========================================
+        indexLeft_element = indexIOSep + 1;
+        element_index = 0;
+        
+        while (true) 
+        {
+          // Protezione: se siamo oltre la lunghezza massima della stringa, esci subito
+          if (indexLeft_element > strPayload.length())
+          {
+            break;
+          }
+
+          indexRight_element = strPayload.indexOf("!", indexLeft_element);
+          // RIPRISTINATO IL CONTROLLO ORIGINALE ORIGINARIO (< 1 oppure < 0)
+          if (indexRight_element < 1) 
+          {
+            indexRight_element = strPayload.length();
+          }
+          
+          IO_element = strPayload.substring(indexLeft_element, indexRight_element);
+          Serial.print("Out: "); Serial.println(IO_element);
+          
+          if (element_index < QX_COUNT && IO_element.length() > 0) 
+          {
+            indexLeft_field = 0;
+            indexRight_field = IO_element.indexOf(",", indexLeft_field);
+            Board_Config.qx[element_index].All_ON_OFF_Member = IO_element.substring(indexLeft_field, indexRight_field).toInt() > 0;
+
+            indexLeft_field = indexRight_field + 1;
+            indexRight_field = IO_element.indexOf(",", indexLeft_field);
+            IO_element.substring(indexLeft_field, indexRight_field).toCharArray(Board_Config.qx[element_index].qx_name, indexRight_field - indexLeft_field + 1);
+
+            indexLeft_field = indexRight_field + 1;
+            indexRight_field = IO_element.indexOf(",", indexLeft_field);
+            Board_Config.qx[element_index].type = IO_element.substring(indexLeft_field, indexRight_field).toInt();
+
+            indexLeft_field = indexRight_field + 1;
+            Board_Config.qx[element_index].timeout = IO_element.substring(indexLeft_field).toInt();
+          }
+
+          // Forza l'uscita se abbiamo processato l'ultimo pezzo di stringa disponibile
+          if (indexRight_element >= strPayload.length()) 
+          { 
+            break; 
+          }
+          
+          indexLeft_element = indexRight_element + 1;
+          element_index++;
+        }
+
+        // Scrittura dei dati in EEPROM
+        EEPROM_Write();
+
+        // Risposta di conferma
+        String tx = "<03&>";
+        size_t lx = tx.length() + 1; 
+        
+        udp_setup.beginPacket(udp_setup.remoteIP(), udp_setup_port);
+        udp_setup.write((const uint8_t *)tx.c_str(), lx);
+        udp_setup.endPacket();
+        
+        log_add("Inviato feedback di SAVE\n");
+      }
+      
+      if (strCMD == "?*")    //  richiesta stato uscite
+      {
+        char firstChar = _WiFi.macAddress().charAt(17);
+        int asciiValue = (int)firstChar;
+        randomSeed(asciiValue);
+        int delay_time = random(0,1000);
+        Serial.print("delay_time_Xt: ");
+        Serial.println(delay_time);
+        delay(delay_time);
+
+        Send_Out_Q_State("?*");
+      }
+      if (strCMD == "05") //  stato uscite da altra unità
+      {
+        if (udp_setup.remoteIP()[3] < _WiFi.LocalIP()[3] )   //  se hanno una stessa uscita con stato diverso la mette uguale
+        {
+          /* <05&Uscita_1_Name;Uscita_1_State!Uscita_2_Name;Uscita_2_State,......> */
+          //  senza fare lo split si potrebbe per ogni uscita cercare se è contenuta nei dati e solo dopo prenderne il valore da impostare (cercare compreso di ; Uscita_1_Name;)
+          int16_t Char_Start = 0;
+          String Q_Value = "";
+          String Q_Name = "";
+          
+          for (size_t i = 0; i < QX_COUNT; i++)
+          {
+            Q_Name = Board_Config.qx[i].qx_name;
+            Q_Name.concat(";");
+            Char_Start = strRX.indexOf(Q_Name);
+            
+            if (Char_Start > -1)
+            {
+              Char_Start = Char_Start + Q_Name.length();
+              Q_Value = strRX.substring(Char_Start, Char_Start + 1);
+              digitalWrite(io_q[i].q, Q_Value.toInt());
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+#pragma endregion UDP_SETUP receive
+
+
+#pragma region UDP_WORK receive  
+// https://www.alejandrowurts.com/projects/esp32-wifi-udp/
+
+void udp_work_receice()
+{
+  int packet_size = udp_work.parsePacket();
+  if (packet_size > 0)
+  {
+    if (packet_size >= 24)
+    {
+      // Limita la lettura alla dimensione del buffer per evitare overflow
+      int toRead = packet_size;
+      if (toRead > (int)(sizeof(udp_work_data_rx) - 1)) 
+      {
+        toRead = sizeof(udp_work_data_rx) - 1;
+      }
+      
+      int readed = udp_work.read(udp_work_data_rx, toRead);
+      if (readed <= 0)
+      {
+        return;
+      }
+      
+      // Assicura che la stringa sia sempre terminata correttamente
+      udp_work_data_rx[readed] = '\0';
+
+      // CORREZIONE: se il pacchetto è almeno 24 byte, leggiamo l'indice 24 
+      // (oppure readed - 1 se il byte di stato è l'ultimo del pacchetto da 24 byte).
+      // Ripristinata la logica del codice originale:
+      int16_t inState = (int)udp_work_data_rx[24];
+
+      /*
+        Serial.print("Readed: ") ; Serial.println(readed);
+        Serial.print("InState: ") ; Serial.println(inState);
+        Serial.println((char *)udp_work_data_rx);
+      */
+      log_add("Rx: "); log_add((char *)udp_work_data_rx); log_add(" " + String(inState) + "\n");
+
+      if (strcmp(udp_work_data_rx, "all_on") == 0)
+      {
+        for (size_t i = 0; i < QX_COUNT; i++)
+        {
+          if (Board_Config.qx[i].All_ON_OFF_Member)
+          {
+            digitalWrite(io_q[i].q, true);
+            io_q[i].TimeSwichedON = millis();
+          }
+        }
+        Send_Out_Q_State("All_On_1");
+      }
+      else
+      {
+        if (strcmp(udp_work_data_rx, "all_off") == 0)
+        {
+          for (size_t i = 0; i < QX_COUNT; i++)
+          {
+            if (Board_Config.qx[i].All_ON_OFF_Member)
+            {
+              digitalWrite(io_q[i].q, false);
+            }
+          }
+          Send_Out_Q_State("All_Off_1");
+        }
+        else // comando normale ad uscita
+        {
+          bool Out_Changed = false;
+          for (size_t i = 0; i < QX_COUNT; i++)
+          {
+            if (strcmp(udp_work_data_rx, Board_Config.qx[i].qx_name) == 0)
+            {
+              if (Board_Config.qx[i].type == QX_TYPE_REPLICATE || Board_Config.qx[i].type == QX_TYPE_REPLICATE_NEGATE)
+              {
+                if (Board_Config.qx[i].type == QX_TYPE_REPLICATE)
+                {
+                  if (inState == 0 && digitalRead(io_q[i].q) == 0)
+                  {
+                    io_q[i].TimeSwichedON = millis();
+                  }
+                  digitalWrite(io_q[i].q, !inState);
+                }
+                else  // QX_TYPE_REPLICATE_NEGATE
+                {
+                  if (inState == 0 && digitalRead(io_q[i].q) == 1)
+                  {
+                    io_q[i].TimeSwichedON = millis();
+                  }
+                  digitalWrite(io_q[i].q, inState);
+                }
+              }
+              else if (inState == 1) // pulsante rilasciato
+              {
+                Out_Changed = true;
+                digitalWrite(io_q[i].q, !digitalRead(io_q[i].q));
+                if (digitalRead(io_q[i].q) == 1)
+                {
+                  io_q[i].TimeSwichedON = millis();
+                }
+              }
+            }
+          }
+          if (Out_Changed)
+          {
+            delay(100); // per evitare che altre esp32 processino prima questo invio che il pulsante
+            Send_Out_Q_State("W_Changed");
+          }
+        }
+      }
+    }
+  }
+}
+#pragma endregion UDP_WORK receive
+
+
+#pragma region ** IO **
+//  SERVIREBBE DI INVIARE OGNI X SECONDI LO STATO DEGLI INGRESSI CON disable_time_analisis
+//  XKE' DALL'ALTRA PARTE VI SARA UN USCITA IN REPLICA.
+//  QUESTO PERMETTERA' UN PIU' SICURO ALLINEAMENTO
+//  PENSARE AD UNA FUNZIONE A PARTE DA CHIAMARE OGNI X SECONDI
+
+void io_gest()
+{
+  for (size_t itx = 0; itx < IX_COUNT; itx++)
+  {
+    if (strlen(Board_Config.ix[itx].qx_short) || strlen(Board_Config.ix[itx].qx_long))
+    {
+    
+      bool_set_value(&ix[itx], digitalRead(io_i[itx]), Board_Config.ix[itx].noise);
+
+      if (ix[itx].JustChanged && ix[itx].ValueTimePrevState > 0)
+      {
+        log_add("***************************");
+        log_add(" ");
+        log_add(Board_Config.ix[itx].qx_short);
+        log_add(" ");
+        log_add(Board_Config.ix[itx].qx_long);
+        log_add(" ");
+        log_add("Changed: ");
+        log_add(String(itx));
+        log_add(" pin: ");
+        log_add(String(io_i[itx]));
+        log_add(" ");
+        log_add("Q_Name:");
+        log_add(String(Board_Config.ix[itx].qx_short));
+        log_add(" - ");
+        log_add(String(Board_Config.ix[itx].qx_long));
+        log_add(" disable_time_analisis: ");
+        log_add(String(Board_Config.ix[itx].disable_time_analisis));
+        log_add(" ");
+        String q_name = "";
+
+        if ((Board_Config.ix[itx].disable_time_analisis == 0))
+        {
+          if (ix[itx].JustUP) //  pulsante rilasciato valuta durata pressione
+          {
+            log_add("JustUP ");
+            if (TimeElapsed(ix[itx].ValueTimePrevState) > 10000) //  tutto off
+            {
+              q_name = "all_off";
+            }
+            else
+            {
+              if (TimeElapsed(ix[itx].ValueTimePrevState) > 5000) //  tutto on
+              {
+                q_name = "all_on";
+              }
+              else
+              {
+                if (TimeElapsed(ix[itx].ValueTimePrevState) > 800) //  pressione lunga
+                {
+                  q_name = String(Board_Config.ix[itx].qx_long);
+                }
+                else
+                {
+                  if (TimeElapsed(ix[itx].ValueTimePrevState) > 100) //  pressione corta
+                  {
+                    q_name = String(Board_Config.ix[itx].qx_short);
+                  }
+                  else
+                  {
+                    log_add("Filtrato < 100ms ");
+                  }
+                }
+              }
+            }
+          }
+        }
+        else  // non valuta tempo e tipo di variazione
+        {
+          log_add(ix[itx].JustUP ? "JustUP "  : "JustDOWN ");
+          q_name = String(Board_Config.ix[itx].qx_short);
+        }
+
+
+        log_add("q_name: " + q_name + "\n");
+        //log_add(q_name + "\n");
+        if ((q_name.length() != 0) && (q_name != "none")) //  valuto q_name per gestire uscite locali
+        {
+          if (q_name == "all_off")
+          {
+            for (size_t i = 0; i < QX_COUNT; i++)
+            {
+              if (Board_Config.qx[i].All_ON_OFF_Member)
+              {
+                digitalWrite(io_q[i].q, false);
+              }
+            }
+            Send_Out_Q_State("All_Off");
+          }
+          else
+          {
+            if (q_name == "all_on")
+            {
+              for (size_t i = 0; i < QX_COUNT; i++)
+              {
+              if (Board_Config.qx[i].All_ON_OFF_Member)
+                {
+                  digitalWrite(io_q[i].q, true);
+                  io_q[i].TimeSwichedON = millis();
+                }
+              }
+              Send_Out_Q_State("All_On");
+            }
+            else
+            {
+              bool Q_Is_Local = false;
+              for (size_t i = 0; i < QX_COUNT; i++) //  controllo se esiste una q locale con questo nome
+              {
+                if (strcmp(Board_Config.qx[i].qx_name, q_name.c_str()) == 0)
+                {
+                  Q_Is_Local = true;
+                  if (Board_Config.qx[i].type == QX_TYPE_REPLICATE || Board_Config.qx[i].type == QX_TYPE_REPLICATE_NEGATE)
+                  {
+                    log_add("Tipo Replica o Replica Negate\n");
+
+                    if (ix[itx].JustDown) //  pulsante premuto
+                    {
+                      io_q[i].TimeSwichedON = millis();
+                    }
+                    
+                    if (Board_Config.qx[i].type == QX_TYPE_REPLICATE)
+                    {
+                      digitalWrite(io_q[i].q, !ix[itx].Value);
+                    }
+                    else  //QX_TYPE_REPLICATE_NEGATE
+                    {
+                      digitalWrite(io_q[i].q, ix[itx].Value);
+                    }
+                  }
+                  else if (ix[itx].Value == true) //  comando solo al rilascio
+                  {
+                    log_add("ix[i].Value == true: ");
+                    log_add(String(ix[itx].Value == true) + "\n");
+                    digitalWrite(io_q[i].q, !digitalRead(io_q[i].q));
+                    if (digitalRead(io_q[i].q) == 1)
+                    {
+                      io_q[i].TimeSwichedON = millis();
+                    }
+                  }
+                }
+              }
+              if (Q_Is_Local)
+              {
+                Send_Out_Q_State("Local");
+              }
+            }
+          }
+
+          IPAddress destination_IP; //  invio in broadcast il nome dell'uscita
+          if (_WiFi.isConnected())
+          {
+            destination_IP = _WiFi.Broadcast_IP();
+          }
+          else
+          {
+            destination_IP = _WiFi.ap_BroadcastIP();
+          }
+
+          q_name.getBytes(udp_work_data_tx, q_name.length() + 1);
+          udp_work_data_tx[24] = ix[itx].Value ? 1 : 0;
+          // Serial.print("Byte valore input: "); Serial.println(udp_work_data_tx[24]);
+          udp_work.beginPacket(destination_IP, udp_work_port);
+          udp_work.write(udp_work_data_tx, 25);
+          udp_work.endPacket();
+        }
+      }
+      
+    }
+  }
+
+  // Gestione timeout uscite
+  bool TimeOut_Occurred = false;
+  for (size_t i = 0; i < QX_COUNT; i++)
+  {
+    if (Board_Config.qx[i].timeout > 0)
+    {
+      if (digitalRead(io_q[i].q) == 1)
+      {
+        if (TimeElapsed(io_q[i].TimeSwichedON) > Board_Config.qx[i].timeout)
+        {
+          digitalWrite(io_q[i].q, 0);
+          TimeOut_Occurred = true;
+        }
+      }
+    }
+  }
+  if (TimeOut_Occurred)
+  {
+    Send_Out_Q_State("TOut");
+  }
+  
+}
+#pragma endregion **IO **
+
+void setup()
+{
+  Serial.begin(115200);
+  delay(200);
+  log_add("delay(10000)\n");
+  delay(10000);  //  quando 'salta' corrente bisogna dare il tempo all'accesspoint di riprendersi
+
+  //---------- WIFI
+  _WiFi.AP_Init(_soft_ap_password);
+  // digitalWrite(internal_LED, 0);
+
+  //---------- BluetoothSerial
+  //SerialBT.begin("ESP32_" + _WiFi.macAddress().substring(-5));
+
+  //---------- HTTP
+  HTTP_Init_Events();
+  server.begin();
+
+  //---------- EEPROM
+  if (EEPROM.begin(788 /*768*/))
+  {
+    log_add("Ok to initialise EEPROM\n");
+  }
+  else
+  {
+    log_add("failed to initialise EEPROM\n");
+  }
+  // Serial.print("Len IO_Config ");
+  // Serial.println(sizeof IO_Config);
+
+  EEPROM_Read();
+
+  //---------- GPIO
+  gpioConfig();
+
+  //---------- UDP
+  // udp.begin(udp_port); // in teoria dovrebbe funzionare sulla rete AP
+ _WiFi.Disconnect();
+ delay(100);
+ _WiFi.config(INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE, INADDR_NONE);
+  udp_work.stop();
+  udp_setup.stop();
+  delay(500);
+  udp_work.begin(_WiFi.ap_LocalIP(), udp_work_port);
+  udp_setup.begin(_WiFi.ap_LocalIP(), udp_setup_port);
+  // Serial.println("UDP_Begin on AP");
+
+  //--------- SET VARS
+  // time_wifi = millis();
+  time_wifi_millis_last_try = 100000; // millis();
+  time_udp_work = millis();
+  time_udp_setup = millis();
+  memset(udp_work_data_tx, 0, sizeof udp_work_data_tx); //  fill variabile con tutti 0
+}
+
+void loop()
+{
+  if (TimeElapsed(time_wifi) > 500)             //  WiFi
+  {
+    time_wifi = millis();
+    bool_set_value(&wifi_is_conneted, _WiFi.isConnected() && _WiFi.hasIP());
+
+    if (!wifi_is_conneted.Value)
+    {
+      if (wifi_is_conneted.JustDown)
+      {
+        // digitalWrite(internal_LED, 0);
+        udp_work.stop();
+        udp_setup.stop();
+        delay(500);
+        udp_work.begin(_WiFi.ap_LocalIP(), udp_work_port);
+        udp_setup.begin(_WiFi.ap_LocalIP(), udp_setup_port);
+        // Serial.println("UDP_Begin on AP");
+      }
+
+      if (TimeElapsed(time_wifi_millis_last_try) > 20000)
+      {
+        _WiFi.Disconnect();
+        delay(500);
+        time_wifi_millis_last_try = millis();
+
+        if (!Board_Config.DHCP)
+        {
+            IPAddress ip;
+            IPAddress mask;
+            IPAddress gate;
+            IPAddress DNS1;
+            IPAddress DNS2;
+            mask.fromString("255.255.255.0");
+            validStaticIP("8.8.8.8", DNS1);
+            validStaticIP("8.8.4.4", DNS2);
+            if (validStaticIP(Board_Config.IP, ip))
+            {
+                gate = ip;
+                gate[3] = 1;
+                if(!_WiFi.config(ip, gate, mask, DNS1, DNS2))
+                {
+                    Serial.println("Failed to configure Static IP");
+                }
+                else
+                {
+                    Serial.println("Static IP configured!");
+                }
+            }
+            else
+            {
+                Serial.println("Invalid static IP in configuration");
+            }
+        }
+
+
+        _WiFi.Connect(WiFi_Parameters.SSID, WiFi_Parameters.PWD);
+        // Serial.println("xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx");
+      }
+    }
+    else  //  Connesso
+    {
+      if (TimeElapsed(time_last_QState_Sended) > 15000)
+      {
+        Send_Out_Q_State("15000");
+      }
+      
+      if (wifi_is_conneted.JustUP)
+      {
+        log_add("Connected!!!!!!!!\n");
+        // digitalWrite(internal_LED, 1);
+        udp_work.stop();
+        udp_setup.stop();
+        delay(500);
+        udp_work.begin(_WiFi.LocalIP(), udp_work_port);
+        udp_setup.begin(_WiFi.LocalIP(), udp_setup_port);
+        delay(500);
+        Send_Out_Q_State("WiFi_UP");
+      }
+    }
+      if (!_WiFi.isConnected())
+      {
+          //log_add("xx  ");
+          //log_add(_WiFi.Verbose_Status());
+          //log_add(" => ");
+          //log_add(String(wifi_is_conneted.Value));
+          //log_add("  ");
+          //log_add(String(wifi_is_conneted.ValueTime));
+          //log_add("  ");
+          //log_add(String(TimeElapsed(time_wifi_millis_last_try))+"\n");
+          // if (_WiFi.status() == WL_IDLE_STATUS){ digitalWrite(internal_LED, !digitalRead(internal_LED));}
+      }
+      }
+  
+
+    server.handleClient();
+
+    if (TimeElapsed(time_udp_work) > 10)          //  Receive_Work
+  {
+    time_udp_work = millis();
+    udp_work_receice();
+  }
+
+    if (TimeElapsed(time_udp_setup) > 100)        //  Receive_Setup
+  {
+    time_udp_setup = millis();
+    udp_setup_receive();
+  }
+
+    io_gest();
+
+    if (restart_requested && (long)(millis() - restart_at) >= 0) {
+      restart_requested = false;
+      ESP.restart();
+    }
+
+    delay(5);
+}

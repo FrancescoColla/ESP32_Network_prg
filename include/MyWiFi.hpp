@@ -30,6 +30,7 @@
 
         void Connect(char *SSID_STA, char *PWD_STA);
         bool isConnected();
+        bool hasIP();
 
         void Disconnect();
 

@@ -137,6 +137,12 @@ bool MyWiFi::isConnected()
         if (WiFi.isConnected()) {_Connecting = false;}
         return WiFi.isConnected();}
 
+bool MyWiFi::hasIP()
+    {
+        IPAddress local_ip = WiFi.localIP();
+        return local_ip != IPAddress(0, 0, 0, 0);
+    }
+
 bool MyWiFi::Connecting()
     {return _Connecting;}
 
@@ -276,6 +282,5 @@ IPAddress MyWiFi::ap_LocalIP()
 
 IPAddress MyWiFi::ap_BroadcastIP()
     {return WiFi.softAPBroadcastIP();}    
-
 
 
