@@ -225,6 +225,66 @@ void EEPROM_Read() {
 
 #pragma region HTTP
 
+    static bool HTTP_Request_UsesAP() {
+      return server.client().localIP() == _WiFi.ap_LocalIP();
+    }
+
+    static bool HTTP_WiFi_Scan_WouldDropSession() {
+      return _WiFi.isConnected() && _WiFi.hasIP() && !HTTP_Request_UsesAP();
+    }
+
+    void HTTP_Event_WiFi_Setup_Manual() {
+      String ToSend =
+          "<!DOCTYPE html>\n"
+          "<html>\n"
+          "<head>\n"
+          "<style>\n"
+          ".style_1 {\n"
+          "  background-color: #4CAF50;\n"
+          "  color: yellow;\n"
+          "  padding: 20px 32px;\n"
+          "  text-decoration: none;\n"
+          "  font-size: 40px;\n"
+          "  margin: 4px 30px;\n"
+          "  border-radius: 8px;\n"
+          "}\n"
+          "input {\n"
+          "  font-size: 40px;\n"
+          "  width: 90%;\n"
+          "  max-width: 900px;\n"
+          "}\n"
+          "</style>\n"
+          "</head>\n"
+          "<body style=\"font-size:20px;\">\n"
+          "<h1 style=\"font-size:60px;\">ESP2_Network</h1>\n"
+          "<p style=\"color:red; font-size:34px;\">La scansione WiFi scollega temporaneamente la STA.</p>\n"
+          "<p style=\"font-size:30px;\">Se stai usando l'IP della rete di casa perderesti questa pagina a meta'.</p>\n"
+          "<p style=\"font-size:30px;\">Per fare la scansione collega il telefono/PC all'AP dell'ESP <b>";
+      ToSend += _WiFi.AP_SSID();
+      ToSend += "</b> e apri <b>http://";
+      ToSend += _WiFi.ap_LocalIP().toString();
+      ToSend += "</b>.</p>\n";
+      ToSend += "<p style=\"font-size:30px;\">Da qui puoi comunque inserire SSID e password manualmente.</p>\n";
+      ToSend += "<p style=\"font-size:30px;\">WiFi corrente: <b>";
+      ToSend += (strlen(WiFi_Parameters.SSID) ? WiFi_Parameters.SSID : "Non configurata");
+      ToSend += "</b></p>\n";
+      ToSend +=
+          "<form action=\"/WiFi_Selected\" method=\"get\">\n"
+          "<p>SSID:</p>\n"
+          "<input type=\"text\" id=\"wifi\" name=\"wifi\" maxlength=\"30\" />\n"
+          "<br><br>\n"
+          "<p>Password:</p>\n"
+          "<input type=\"password\" id=\"password\" name=\"pwd\" maxlength=\"30\" />\n"
+          "<br><br>\n"
+          "<a class=\"style_1\" href=\"/\">Cancel</a>\n"
+          "<button class=\"style_1\" type=\"submit\">Ok</button>\n"
+          "<a class=\"style_1\" href=\"/WiFi_Server\">Server</a>\n"
+          "</form>\n"
+          "</body>\n"
+          "</html>\n";
+      server.send(200, "text/html", ToSend);
+    }
+
   #pragma region HTTP_Events_Pages
     void HTTP_Event_Reset() {
       String ToSend =
@@ -304,6 +364,11 @@ void EEPROM_Read() {
     }
 
     void HTTP_Event_WiFi_Setup() {
+      if (HTTP_WiFi_Scan_WouldDropSession()) {
+        HTTP_Event_WiFi_Setup_Manual();
+        return;
+      }
+
       String ToSend =
           "<!DOCTYPE html>\n"
           "<html>\n"
@@ -320,6 +385,11 @@ void EEPROM_Read() {
     }
 
     void HTTP_Event_WiFi_Setup_Scan() {
+      if (HTTP_WiFi_Scan_WouldDropSession()) {
+        HTTP_Event_WiFi_Setup_Manual();
+        return;
+      }
+
       String ToSend = R"rawliteral(
       <!DOCTYPE html>
       <html>
