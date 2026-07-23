@@ -115,6 +115,10 @@ ulong time_last_QState_Sended = 0;
 ulong restart_start_time = 0;
 bool restart_requested = false;
 
+// Blocca temporaneamente la lettura ingressi quando cambia una uscita.
+bool q_output_changed_flag = false;
+ulong q_output_changed_millis = 0;
+
 //---------- EEPROM
 int16_t eeprom_initialized = 0;
 
@@ -135,6 +139,19 @@ static bool validStaticIP(const char *ip_str, IPAddress &out) {
     return false;
   }
   return out.fromString(ip_str);
+}
+
+static void mark_Q_Output_Changed() {
+  q_output_changed_flag = true;
+  q_output_changed_millis = millis();
+}
+
+static void set_Q_Output_State(size_t q_index, bool new_state) {
+  bool current_state = (digitalRead(io_q[q_index].q) != 0);
+  if (current_state != new_state) {
+    digitalWrite(io_q[q_index].q, new_state ? HIGH : LOW);
+    mark_Q_Output_Changed();
+  }
 }
 
 void gpioConfig() {
@@ -877,7 +894,7 @@ void udp_setup_receive() {
             if (Char_Start > -1) {
               Char_Start += Q_Name.length();
               Q_Value = strRX.substring(Char_Start, Char_Start + 1);
-              digitalWrite(io_q[i].q, Q_Value.toInt());
+              set_Q_Output_State(i, Q_Value.toInt() != 0);
             }
           }
         }
@@ -908,7 +925,7 @@ void udp_work_receice() {
       if (strcmp(udp_work_data_rx, "all_on") == 0) {
         for (size_t i = 0; i < QX_COUNT; i++) {
           if (Board_Config.qx[i].All_ON_OFF_Member) {
-            digitalWrite(io_q[i].q, true);
+            set_Q_Output_State(i, true);
             io_q[i].TimeSwichedON = millis();
           }
         }
@@ -917,7 +934,7 @@ void udp_work_receice() {
       else if (strcmp(udp_work_data_rx, "all_off") == 0) {
         for (size_t i = 0; i < QX_COUNT; i++) {
           if (Board_Config.qx[i].All_ON_OFF_Member) {
-            digitalWrite(io_q[i].q, false);
+            set_Q_Output_State(i, false);
           }
         }
         Send_Out_Q_State("All_Off_1");
@@ -931,18 +948,18 @@ void udp_work_receice() {
                 if (inState == 0 && digitalRead(io_q[i].q) == 0) {
                   io_q[i].TimeSwichedON = millis();
                 }
-                digitalWrite(io_q[i].q, !inState);
+                set_Q_Output_State(i, !inState);
               }
               else {
                 if (inState == 0 && digitalRead(io_q[i].q) == 1) {
                   io_q[i].TimeSwichedON = millis();
                 }
-                digitalWrite(io_q[i].q, inState);
+                set_Q_Output_State(i, inState != 0);
               }
             }
             else if (inState == 1) {
               Out_Changed = true;
-              digitalWrite(io_q[i].q, !digitalRead(io_q[i].q));
+              set_Q_Output_State(i, !digitalRead(io_q[i].q));
               if (digitalRead(io_q[i].q) == 1) {
                 io_q[i].TimeSwichedON = millis();
               }
@@ -961,100 +978,106 @@ void udp_work_receice() {
 
 #pragma region ** IO **
 void io_gest() {
-  for (size_t itx = 0; itx < IX_COUNT; itx++) {
-    if (strlen(Board_Config.ix[itx].qx_short) || strlen(Board_Config.ix[itx].qx_long)) {
-      bool_set_value(&ix[itx], digitalRead(io_i[itx]), Board_Config.ix[itx].noise);
+  if (q_output_changed_flag && (ulong)(millis() - q_output_changed_millis) > 500) {
+    q_output_changed_flag = false;
+  }
 
-      if (ix[itx].JustChanged && ix[itx].ValueTimePrevState > 0) {
-        log_add("*************************** ");
-        log_add(Board_Config.ix[itx].qx_short); log_add(" ");
-        log_add(Board_Config.ix[itx].qx_long); log_add(" ");
-        log_add("Changed: "); log_add(String(itx));
-        log_add(" pin: "); log_add(String(io_i[itx])); log_add(" ");
-        log_add("Q_Name:"); log_add(String(Board_Config.ix[itx].qx_short)); log_add(" - ");
-        log_add(String(Board_Config.ix[itx].qx_long));
-        log_add(" disable_time_analisis: "); log_add(String(Board_Config.ix[itx].disable_time_analisis));
-        log_add(" ");
+  if (!q_output_changed_flag) {
+    for (size_t itx = 0; itx < IX_COUNT; itx++) {
+      if (strlen(Board_Config.ix[itx].qx_short) || strlen(Board_Config.ix[itx].qx_long)) {
+        bool_set_value(&ix[itx], digitalRead(io_i[itx]), Board_Config.ix[itx].noise);
+
+        if (ix[itx].JustChanged && ix[itx].ValueTimePrevState > 0) {
+          log_add("*************************** ");
+          log_add(Board_Config.ix[itx].qx_short); log_add(" ");
+          log_add(Board_Config.ix[itx].qx_long); log_add(" ");
+          log_add("Changed: "); log_add(String(itx));
+          log_add(" pin: "); log_add(String(io_i[itx])); log_add(" ");
+          log_add("Q_Name:"); log_add(String(Board_Config.ix[itx].qx_short)); log_add(" - ");
+          log_add(String(Board_Config.ix[itx].qx_long));
+          log_add(" disable_time_analisis: "); log_add(String(Board_Config.ix[itx].disable_time_analisis));
+          log_add(" ");
         
-        String q_name = "";
+          String q_name = "";
 
-        if (Board_Config.ix[itx].disable_time_analisis == 0) {
-          if (ix[itx].JustUP) {
-            log_add("JustUP ");
-            if (TimeElapsed(ix[itx].ValueTimePrevState) > 10000) {
-              q_name = "all_off";
-            } else if (TimeElapsed(ix[itx].ValueTimePrevState) > 5000) {
-              q_name = "all_on";
-            } else if (TimeElapsed(ix[itx].ValueTimePrevState) > 800) {
-              q_name = String(Board_Config.ix[itx].qx_long);
-            } else if (TimeElapsed(ix[itx].ValueTimePrevState) > 100) {
-              q_name = String(Board_Config.ix[itx].qx_short);
-            } else {
-              log_add("Filtrato < 100ms ");
-            }
-          }
-        } else {
-          log_add(ix[itx].JustUP ? "JustUP "  : "JustDOWN ");
-          q_name = String(Board_Config.ix[itx].qx_short);
-        }
-
-        log_add("q_name: " + q_name + "\n");
-        
-        if (q_name.length() != 0 && q_name != "none") {
-          if (q_name == "all_off") {
-            for (size_t i = 0; i < QX_COUNT; i++) {
-              if (Board_Config.qx[i].All_ON_OFF_Member) {
-                digitalWrite(io_q[i].q, false);
+          if (Board_Config.ix[itx].disable_time_analisis == 0) {
+            if (ix[itx].JustUP) {
+              log_add("JustUP ");
+              if (TimeElapsed(ix[itx].ValueTimePrevState) > 10000) {
+                q_name = "all_off";
+              } else if (TimeElapsed(ix[itx].ValueTimePrevState) > 5000) {
+                q_name = "all_on";
+              } else if (TimeElapsed(ix[itx].ValueTimePrevState) > 800) {
+                q_name = String(Board_Config.ix[itx].qx_long);
+              } else if (TimeElapsed(ix[itx].ValueTimePrevState) > 100) {
+                q_name = String(Board_Config.ix[itx].qx_short);
+              } else {
+                log_add("Filtrato < 100ms ");
               }
             }
-            Send_Out_Q_State("All_Off");
-          } else if (q_name == "all_on") {
-            for (size_t i = 0; i < QX_COUNT; i++) {
-              if (Board_Config.qx[i].All_ON_OFF_Member) {
-                digitalWrite(io_q[i].q, true);
-                io_q[i].TimeSwichedON = millis();
-              }
-            }
-            Send_Out_Q_State("All_On");
           } else {
-            bool Q_Is_Local = false;
-            for (size_t i = 0; i < QX_COUNT; i++) {
-              if (strcmp(Board_Config.qx[i].qx_name, q_name.c_str()) == 0) {
-                Q_Is_Local = true;
-                if (Board_Config.qx[i].type == QX_TYPE_REPLICATE || Board_Config.qx[i].type == QX_TYPE_REPLICATE_NEGATE) {
-                  log_add("Tipo Replica o Replica Negate\n");
+            log_add(ix[itx].JustUP ? "JustUP "  : "JustDOWN ");
+            q_name = String(Board_Config.ix[itx].qx_short);
+          }
 
-                  if (ix[itx].JustDown) {
-                    io_q[i].TimeSwichedON = millis();
-                  }
+          log_add("q_name: " + q_name + "\n");
+        
+          if (q_name.length() != 0 && q_name != "none") {
+            if (q_name == "all_off") {
+              for (size_t i = 0; i < QX_COUNT; i++) {
+                if (Board_Config.qx[i].All_ON_OFF_Member) {
+                  set_Q_Output_State(i, false);
+                }
+              }
+              Send_Out_Q_State("All_Off");
+            } else if (q_name == "all_on") {
+              for (size_t i = 0; i < QX_COUNT; i++) {
+                if (Board_Config.qx[i].All_ON_OFF_Member) {
+                  set_Q_Output_State(i, true);
+                  io_q[i].TimeSwichedON = millis();
+                }
+              }
+              Send_Out_Q_State("All_On");
+            } else {
+              bool Q_Is_Local = false;
+              for (size_t i = 0; i < QX_COUNT; i++) {
+                if (strcmp(Board_Config.qx[i].qx_name, q_name.c_str()) == 0) {
+                  Q_Is_Local = true;
+                  if (Board_Config.qx[i].type == QX_TYPE_REPLICATE || Board_Config.qx[i].type == QX_TYPE_REPLICATE_NEGATE) {
+                    log_add("Tipo Replica o Replica Negate\n");
+
+                    if (ix[itx].JustDown) {
+                      io_q[i].TimeSwichedON = millis();
+                    }
                   
-                  if (Board_Config.qx[i].type == QX_TYPE_REPLICATE) {
-                    digitalWrite(io_q[i].q, !ix[itx].Value);
-                  } else {
-                    digitalWrite(io_q[i].q, ix[itx].Value);
-                  }
-                } else if (ix[itx].Value == true) {
-                  log_add("ix[i].Value == true: ");
-                  log_add(String(ix[itx].Value == true) + "\n");
-                  digitalWrite(io_q[i].q, !digitalRead(io_q[i].q));
-                  if (digitalRead(io_q[i].q) == 1) {
-                    io_q[i].TimeSwichedON = millis();
+                    if (Board_Config.qx[i].type == QX_TYPE_REPLICATE) {
+                      set_Q_Output_State(i, !ix[itx].Value);
+                    } else {
+                      set_Q_Output_State(i, ix[itx].Value);
+                    }
+                  } else if (ix[itx].Value == true) {
+                    log_add("ix[i].Value == true: ");
+                    log_add(String(ix[itx].Value == true) + "\n");
+                    set_Q_Output_State(i, !digitalRead(io_q[i].q));
+                    if (digitalRead(io_q[i].q) == 1) {
+                      io_q[i].TimeSwichedON = millis();
+                    }
                   }
                 }
               }
+              if (Q_Is_Local) {
+                Send_Out_Q_State("Local");
+              }
             }
-            if (Q_Is_Local) {
-              Send_Out_Q_State("Local");
-            }
+
+            IPAddress destination_IP = _WiFi.isConnected() ? _WiFi.Broadcast_IP() : _WiFi.ap_BroadcastIP();
+
+            q_name.getBytes(udp_work_data_tx, q_name.length() + 1);
+            udp_work_data_tx[24] = ix[itx].Value ? 1 : 0;
+            udp_work.beginPacket(destination_IP, udp_work_port);
+            udp_work.write(udp_work_data_tx, 25);
+            udp_work.endPacket();
           }
-
-          IPAddress destination_IP = _WiFi.isConnected() ? _WiFi.Broadcast_IP() : _WiFi.ap_BroadcastIP();
-
-          q_name.getBytes(udp_work_data_tx, q_name.length() + 1);
-          udp_work_data_tx[24] = ix[itx].Value ? 1 : 0;
-          udp_work.beginPacket(destination_IP, udp_work_port);
-          udp_work.write(udp_work_data_tx, 25);
-          udp_work.endPacket();
         }
       }
     }
@@ -1065,7 +1088,7 @@ void io_gest() {
   for (size_t i = 0; i < QX_COUNT; i++) {
     if (Board_Config.qx[i].timeout > 0 && digitalRead(io_q[i].q) == 1) {
       if (TimeElapsed(io_q[i].TimeSwichedON) > Board_Config.qx[i].timeout) {
-        digitalWrite(io_q[i].q, 0);
+        set_Q_Output_State(i, false);
         TimeOut_Occurred = true;
       }
     }
