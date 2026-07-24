@@ -648,32 +648,47 @@ void EEPROM_Read() {
 #pragma endregion HTTP
 
 #pragma region Varie
-  void Send_Out_Q_State(String Context) {
-    time_last_QState_Sended = millis();
-    String MyOut = "<05&";
-    bool OutPresent = false;
-    for (size_t i = 0; i < QX_COUNT; i++) {
-      if (strlen(Board_Config.qx[i].qx_name) > 0 && strcmp(Board_Config.qx[i].qx_name , "none") != 0) {
-        if (OutPresent) {
-          MyOut.concat("!");
-        }
-        OutPresent = true;
-        MyOut.concat(Board_Config.qx[i].qx_name);
-        MyOut.concat(";");
-        MyOut.concat(digitalRead(io_q[i].q));
+void Send_Out_Q_State(String Context) {
+  time_last_QState_Sended = millis();
+  String MyOut = "<05&";
+  bool OutPresent = false;
+
+  for (size_t i = 0; i < QX_COUNT; i++) {
+    if (strlen(Board_Config.qx[i].qx_name) > 0 && strcmp(Board_Config.qx[i].qx_name, "none") != 0) {
+      if (OutPresent) {
+        MyOut.concat("!");
       }
-    }
-    if (OutPresent) {
-      MyOut.concat(">");
-      udp_setup.beginPacket(_WiFi.Broadcast_IP(), udp_setup_port);
-      udp_setup.write((const uint8_t *)MyOut.c_str(), MyOut.length());
-      udp_setup.endPacket();
-      log_add(Context); log_add(" ");
-      log_add("Ho inviato: ");
-      log_add(MyOut);
-      log_add("\n");
+      OutPresent = true;
+      MyOut.concat(Board_Config.qx[i].qx_name);
+      MyOut.concat(";");
+      MyOut.concat(digitalRead(io_q[i].q));
     }
   }
+
+  if (OutPresent) {
+    MyOut.concat(">");
+
+    // 1. Azzeriamo il buffer
+    memset(udp_setup_data_tx, 0, sizeof(udp_setup_data_tx));
+    
+    // 2. Copiamo la stringa nel buffer (getBytes aggiunge automaticamente il \0 alla fine)
+    MyOut.getBytes(udp_setup_data_tx, sizeof(udp_setup_data_tx));
+    
+    // 3. SE IL RICEVENTE VUOLE IL '\0':
+    // Lunghezza della stringa + 1 byte per inviare anche il terminatore nullo '\0'
+    size_t lx = MyOut.length() + 1; 
+
+    // 4. Invio via UDP
+    udp_setup.beginPacket(_WiFi.Broadcast_IP(), udp_setup_port);
+    udp_setup.write(udp_setup_data_tx, lx);
+    udp_setup.endPacket();
+
+    log_add(Context); log_add(" ");
+    log_add("Ho inviato: ");
+    log_add(MyOut);
+    log_add("\n");
+  }
+}
 #pragma endregion Varie
 
 #pragma region UDP_SETUP receive
@@ -880,8 +895,12 @@ void udp_setup_receive() {
         Send_Out_Q_State("?*");
       }
 
-      if (strCMD == "05") {
-        if (udp_setup.remoteIP()[3] < _WiFi.LocalIP()[3]) {
+      if (strCMD == "05") //  stato uscite da altra unità
+      {
+        if (udp_setup.remoteIP()[3] != _WiFi.LocalIP()[3]) //  se hanno una stessa uscita con stato diverso la mette uguale
+        {
+          /* <05&Uscita_1_Name;Uscita_1_State!Uscita_2_Name;Uscita_2_State,......> */
+          //  senza fare lo split si potrebbe per ogni uscita cercare se è contenuta nei dati e solo dopo prenderne il valore da impostare (cercare compreso di ; Uscita_1_Name;)
           int16_t Char_Start = 0;
           String Q_Value = "";
           String Q_Name = "";
@@ -905,6 +924,7 @@ void udp_setup_receive() {
 #pragma endregion UDP_SETUP receive
 
 #pragma region UDP_WORK receive  
+// https://www.alejandrowurts.com/projects/esp32-wifi-udp/
 void udp_work_receice() {
   int packet_size = udp_work.parsePacket();
   if (packet_size > 0) {
