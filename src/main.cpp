@@ -668,19 +668,12 @@ void Send_Out_Q_State(String Context) {
   if (OutPresent) {
     MyOut.concat(">");
 
-    // 1. Azzeriamo il buffer
-    memset(udp_setup_data_tx, 0, sizeof(udp_setup_data_tx));
-    
-    // 2. Copiamo la stringa nel buffer (getBytes aggiunge automaticamente il \0 alla fine)
-    MyOut.getBytes(udp_setup_data_tx, sizeof(udp_setup_data_tx));
-    
-    // 3. SE IL RICEVENTE VUOLE IL '\0':
     // Lunghezza della stringa + 1 byte per inviare anche il terminatore nullo '\0'
-    size_t lx = MyOut.length() + 1; 
+    size_t lx = MyOut.length() + 1;
 
-    // 4. Invio via UDP
+    // Invio via UDP
     udp_setup.beginPacket(_WiFi.Broadcast_IP(), udp_setup_port);
-    udp_setup.write(udp_setup_data_tx, lx);
+    udp_setup.write((const uint8_t *)MyOut.c_str(), lx);
     udp_setup.endPacket();
 
     log_add(Context); log_add(" ");
