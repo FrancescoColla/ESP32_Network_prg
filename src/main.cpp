@@ -897,7 +897,7 @@ void udp_setup_receive() {
 
       if (strCMD == "05") //  stato uscite da altra unità
       {
-        if (udp_setup.remoteIP()[3] != _WiFi.LocalIP()[3]) //  se hanno una stessa uscita con stato diverso la mette uguale
+        if (udp_setup.remoteIP()[3] < _WiFi.LocalIP()[3]) //  se hanno una stessa uscita con stato diverso la mette uguale
         {
           /* <05&Uscita_1_Name;Uscita_1_State!Uscita_2_Name;Uscita_2_State,......> */
           //  senza fare lo split si potrebbe per ogni uscita cercare se è contenuta nei dati e solo dopo prenderne il valore da impostare (cercare compreso di ; Uscita_1_Name;)
