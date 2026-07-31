@@ -1,0 +1,24 @@
+{
+  "outputs": [
+    {
+      "Name": "luce_1",
+      "Enabled": true,
+      "rules": [
+        {
+          "Enabled": true,
+          "Validita_Start": 1,
+          "Validita_End": 5,
+          "Ora_Attivazione": "18:30",
+          "ON_or_OFF": "ON"
+        },
+        {
+          "Enabled": true,
+          "Validita_Start": 1,
+          "Validita_End": 5,
+          "Ora_Attivazione": "23:30",
+          "ON_or_OFF": "OFF"
+        }
+      ]
+    }
+  ]
+}

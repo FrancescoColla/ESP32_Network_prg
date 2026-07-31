@@ -921,39 +921,67 @@ void udp_setup_receive() {
 void udp_work_receice() {
   int packet_size = udp_work.parsePacket();
   if (packet_size > 0) {
-    if (packet_size >= 25) { // Garantito l'accesso sicuro fino al byte index 24
-      int toRead = packet_size;
-      if (toRead > (int)(sizeof(udp_work_data_rx) - 1)) {
-        toRead = sizeof(udp_work_data_rx) - 1;
+    int toRead = packet_size;
+    if (toRead > (int)(sizeof(udp_work_data_rx) - 1)) {
+      toRead = sizeof(udp_work_data_rx) - 1;
+    }
+
+    int readed = udp_work.read(udp_work_data_rx, toRead);
+    if (readed <= 0) return;
+
+    udp_work_data_rx[readed] = '\0';
+    int16_t inState = (readed >= 25) ? (int16_t)udp_work_data_rx[24] : 0;
+
+    log_add("Rx: "); log_add((char *)udp_work_data_rx); log_add(" " + String(inState) + "\n");
+
+    if (strcmp(udp_work_data_rx, "all_on") == 0) {
+      for (size_t i = 0; i < QX_COUNT; i++) {
+        if (Board_Config.qx[i].All_ON_OFF_Member) {
+          set_Q_Output_State(i, true);
+          io_q[i].TimeSwichedON = millis();
+        }
       }
-      
-      int readed = udp_work.read(udp_work_data_rx, toRead);
-      if (readed <= 0) return;
-      
-      udp_work_data_rx[readed] = '\0';
-      int16_t inState = (int)udp_work_data_rx[24];
+      Send_Out_Q_State("All_On_1");
+    }
+    else if (strcmp(udp_work_data_rx, "all_off") == 0) {
+      for (size_t i = 0; i < QX_COUNT; i++) {
+        if (Board_Config.qx[i].All_ON_OFF_Member) {
+          set_Q_Output_State(i, false);
+        }
+      }
+      Send_Out_Q_State("All_Off_1");
+    }
+    else {
+      bool Out_Changed = false;
+      bool Explicit_Command = false;
 
-      log_add("Rx: "); log_add((char *)udp_work_data_rx); log_add(" " + String(inState) + "\n");
+      // Nuovo formato: Nome_Uscita/ON oppure Nome_Uscita/OFF
+      char *cmdSep = strrchr(udp_work_data_rx, '/');
+      if (cmdSep != nullptr) {
+        *cmdSep = '\0';
+        const char *targetName = udp_work_data_rx;
+        const char *targetCmd = cmdSep + 1;
 
-      if (strcmp(udp_work_data_rx, "all_on") == 0) {
-        for (size_t i = 0; i < QX_COUNT; i++) {
-          if (Board_Config.qx[i].All_ON_OFF_Member) {
-            set_Q_Output_State(i, true);
-            io_q[i].TimeSwichedON = millis();
+        if (strcmp(targetCmd, "ON") == 0 || strcmp(targetCmd, "OFF") == 0) {
+          Explicit_Command = true;
+          bool requestedState = (strcmp(targetCmd, "ON") == 0);
+
+          for (size_t i = 0; i < QX_COUNT; i++) {
+            if (strcmp(targetName, Board_Config.qx[i].qx_name) == 0) {
+              bool currentState = (digitalRead(io_q[i].q) != 0);
+              if (currentState != requestedState) {
+                set_Q_Output_State(i, requestedState);
+                Out_Changed = true;
+                if (requestedState) {
+                  io_q[i].TimeSwichedON = millis();
+                }
+              }
+            }
           }
         }
-        Send_Out_Q_State("All_On_1");
       }
-      else if (strcmp(udp_work_data_rx, "all_off") == 0) {
-        for (size_t i = 0; i < QX_COUNT; i++) {
-          if (Board_Config.qx[i].All_ON_OFF_Member) {
-            set_Q_Output_State(i, false);
-          }
-        }
-        Send_Out_Q_State("All_Off_1");
-      }
-      else {
-        bool Out_Changed = false;
+
+      if (!Explicit_Command) {
         for (size_t i = 0; i < QX_COUNT; i++) {
           if (strcmp(udp_work_data_rx, Board_Config.qx[i].qx_name) == 0) {
             if (Board_Config.qx[i].type == QX_TYPE_REPLICATE || Board_Config.qx[i].type == QX_TYPE_REPLICATE_NEGATE) {
@@ -979,10 +1007,11 @@ void udp_work_receice() {
             }
           }
         }
-        if (Out_Changed) {
-          delay(20); // Ridotto delay per risposta veloce
-          Send_Out_Q_State("W_Changed");
-        }
+      }
+
+      if (Out_Changed) {
+        delay(20); // Ridotto delay per risposta veloce
+        Send_Out_Q_State(Explicit_Command ? "W_Explicit" : "W_Changed");
       }
     }
   }
