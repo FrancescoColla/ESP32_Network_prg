@@ -22,30 +22,6 @@ static const size_t UDP_TX_BUFFER_SIZE = 640;
 
 WebServer server(HTTP_SERVER_PORT);
 
-//---------- Log (Buffer Circolare per evitare la frammentazione dell'Heap)
-char log_buffer[MAX_LOG_BUFFER_SIZE] = {0};
-size_t log_head = 0;
-
-void log_add(const String &NewLog) {
-  Serial.print(NewLog);
-  for (size_t i = 0; i < NewLog.length(); i++) {
-    log_buffer[log_head] = NewLog[i];
-    log_head = (log_head + 1) % MAX_LOG_BUFFER_SIZE;
-  }
-}
-
-String get_logs_as_string() {
-  String out = "";
-  out.reserve(MAX_LOG_BUFFER_SIZE);
-  for (size_t i = 0; i < MAX_LOG_BUFFER_SIZE; i++) {
-    size_t idx = (log_head + i) % MAX_LOG_BUFFER_SIZE;
-    if (log_buffer[idx] != '\0') {
-      out += log_buffer[idx];
-    }
-  }
-  return out;
-}
-
 #pragma region Variable Declaration
 //---------- [COSTANTI]
 const int16_t IX_COUNT = 10;
@@ -133,6 +109,30 @@ stBool ix[10];
 #pragma endregion Variable Declaration
 
 void EEPROM_Read();
+
+//---------- Log (Buffer Circolare per evitare la frammentazione dell'Heap)
+char log_buffer[MAX_LOG_BUFFER_SIZE] = {0};
+size_t log_head = 0;
+
+void log_add(const String &NewLog) {
+  Serial.print(NewLog);
+  for (size_t i = 0; i < NewLog.length(); i++) {
+    log_buffer[log_head] = NewLog[i];
+    log_head = (log_head + 1) % MAX_LOG_BUFFER_SIZE;
+  }
+}
+
+String get_logs_as_string() {
+  String out = "";
+  out.reserve(MAX_LOG_BUFFER_SIZE);
+  for (size_t i = 0; i < MAX_LOG_BUFFER_SIZE; i++) {
+    size_t idx = (log_head + i) % MAX_LOG_BUFFER_SIZE;
+    if (log_buffer[idx] != '\0') {
+      out += log_buffer[idx];
+    }
+  }
+  return out;
+}
 
 static bool validStaticIP(const char *ip_str, IPAddress &out) {
   if (ip_str == nullptr || ip_str[0] == '\0') {
