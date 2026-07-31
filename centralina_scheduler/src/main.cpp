@@ -16,10 +16,11 @@ static const char *WIFI_STA_SSID = "";
 static const char *WIFI_STA_PWD = "";
 static const char *WIFI_AP_PASSWORD = "87654321";
 
-struct str_a {
+struct str_device {
   bool Enabled = false;
-  uint8_t Validita_Start = 1;   // 1=lun ... 7=dom
-  uint8_t Validita_End = 7;     // 1=lun ... 7=dom
+  uint8_t Validita_Start = 1;   // 1=gen ... 12=dic
+  uint8_t Validita_End = 12;    // 1=gen ... 12=dic
+  uint8_t WeekdayMask = 0x7F;  // bit0=lun ... bit6=dom, 0x7F = tutti i giorni
   char Ora_Attivazione[6] = {0}; // HH:MM
   bool ON_or_OFF = false;       // true=ON, false=OFF
 
@@ -27,16 +28,16 @@ struct str_a {
   int32_t LastExecutedWeekMinute = -1;
 };
 
-struct str_b {
+struct str_group {
   char Name[OUTPUT_NAME_MAX] = {0};
   bool Enabled = false;
   uint16_t RuleCount = 0;
-  str_a *Rules = nullptr;
+  str_device *Rules = nullptr;
 };
 
 struct scheduler_config_t {
   uint16_t OutputCount = 0;
-  str_b *Outputs = nullptr;
+  str_group *Outputs = nullptr;
 } Scheduler;
 
 WiFiUDP Udp;
@@ -47,6 +48,7 @@ unsigned long LastWiFiRetryMs = 0;
 unsigned long LastSchedulerTickMs = 0;
 int32_t LastEvaluatedWeekMinute = -1;
 
+// Libera la memoria allocata per le regole e i gruppi dello scheduler.
 static void freeSchedulerConfig() {
   if (Scheduler.Outputs != nullptr) {
     for (uint16_t i = 0; i < Scheduler.OutputCount; i++) {
@@ -60,6 +62,7 @@ static void freeSchedulerConfig() {
   Scheduler.OutputCount = 0;
 }
 
+// Converte una stringa HH:MM in minuti trascorsi dalla mezzanotte.
 static bool parseTimeHHMM(const char *hhmm, int16_t &minutesOut) {
   if (hhmm == nullptr || strlen(hhmm) != 5 || hhmm[2] != ':') {
     return false;
@@ -80,6 +83,7 @@ static bool parseTimeHHMM(const char *hhmm, int16_t &minutesOut) {
   return true;
 }
 
+// Converte il giorno della settimana del RTC nel formato 1=lun ... 7=dom.
 static uint8_t dayOfWeekMonToSun(const DateTime &now) {
   // RTClib: 0=dom ... 6=sab -> 1=lun ... 7=dom
   uint8_t dow = now.dayOfTheWeek();
@@ -89,19 +93,31 @@ static uint8_t dayOfWeekMonToSun(const DateTime &now) {
   return dow;
 }
 
-static bool dayInRange(uint8_t day, uint8_t start, uint8_t end) {
-  if (day < 1 || day > 7 || start < 1 || start > 7 || end < 1 || end > 7) {
+// Verifica se un giorno ricade nell'intervallo di validità della regola.
+// Verifica se il mese corrente rientra nell'intervallo di validità della regola.
+static bool monthInRange(uint8_t month, uint8_t start, uint8_t end) {
+  if (month < 1 || month > 12 || start < 1 || start > 12 || end < 1 || end > 12) {
     return false;
   }
 
   if (start <= end) {
-    return day >= start && day <= end;
+    return month >= start && month <= end;
   }
 
-  // Intervallo ciclico, esempio: ven(5) -> mar(2)
-  return day >= start || day <= end;
+  // Intervallo ciclico, esempio: ott(10) -> mar(3)
+  return month >= start || month <= end;
 }
 
+// Verifica se il giorno della settimana è abilitato tramite bitmask.
+static bool weekdayEnabled(uint8_t day, uint8_t mask) {
+  if (day < 1 || day > 7) {
+    return false;
+  }
+
+  return (mask & (1u << (day - 1))) != 0;
+}
+
+// Calcola l'indirizzo broadcast della rete Wi-Fi attiva.
 static IPAddress getBroadcastIp() {
   IPAddress ip = WiFi.localIP();
   IPAddress mask = WiFi.subnetMask();
@@ -114,6 +130,7 @@ static IPAddress getBroadcastIp() {
   return out;
 }
 
+// Invia il comando ON/OFF di un output tramite UDP al dispositivo destinatario.
 static void sendOutputCommand(const char *outputName, bool turnOn) {
   if (outputName == nullptr || outputName[0] == '\0') {
     return;
@@ -134,6 +151,7 @@ static void sendOutputCommand(const char *outputName, bool turnOn) {
   Serial.println(tx);
 }
 
+// Legge il contenuto raw del file delle regole dalla LittleFS.
 static String readRulesRaw() {
   if (!LittleFS.exists(SCHEDULER_FILE)) {
     return String();
@@ -149,6 +167,7 @@ static String readRulesRaw() {
   return content;
 }
 
+// Salva il JSON delle regole sul file di configurazione della LittleFS.
 static bool saveRulesRaw(const String &rawJson) {
   File file = LittleFS.open(SCHEDULER_FILE, "w");
   if (!file) {
@@ -160,6 +179,7 @@ static bool saveRulesRaw(const String &rawJson) {
   return written == rawJson.length();
 }
 
+// Carica e interpreta le regole dallo storage flash nella struttura in memoria.
 static bool loadSchedulerFromFs(String &errorMessage) {
   String raw = readRulesRaw();
   if (raw.length() == 0) {
@@ -183,7 +203,7 @@ static bool loadSchedulerFromFs(String &errorMessage) {
   freeSchedulerConfig();
 
   Scheduler.OutputCount = (uint16_t)outputs.size();
-  Scheduler.Outputs = new str_b[Scheduler.OutputCount];
+  Scheduler.Outputs = new str_group[Scheduler.OutputCount];
 
   for (uint16_t i = 0; i < Scheduler.OutputCount; i++) {
     JsonObject jOut = outputs[i].as<JsonObject>();
@@ -198,13 +218,14 @@ static bool loadSchedulerFromFs(String &errorMessage) {
     Scheduler.Outputs[i].RuleCount = rules.isNull() ? 0 : (uint16_t)rules.size();
 
     if (Scheduler.Outputs[i].RuleCount > 0) {
-      Scheduler.Outputs[i].Rules = new str_a[Scheduler.Outputs[i].RuleCount];
+      Scheduler.Outputs[i].Rules = new str_device[Scheduler.Outputs[i].RuleCount];
       for (uint16_t r = 0; r < Scheduler.Outputs[i].RuleCount; r++) {
         JsonObject jRule = rules[r].as<JsonObject>();
 
         Scheduler.Outputs[i].Rules[r].Enabled = jRule["Enabled"] | false;
         Scheduler.Outputs[i].Rules[r].Validita_Start = (uint8_t)(jRule["Validita_Start"] | 1);
-        Scheduler.Outputs[i].Rules[r].Validita_End = (uint8_t)(jRule["Validita_End"] | 7);
+        Scheduler.Outputs[i].Rules[r].Validita_End = (uint8_t)(jRule["Validita_End"] | 12);
+        Scheduler.Outputs[i].Rules[r].WeekdayMask = (uint8_t)(jRule["WeekdayMask"] | 0x7F);
 
         const char *ora = jRule["Ora_Attivazione"] | "00:00";
         strncpy(Scheduler.Outputs[i].Rules[r].Ora_Attivazione, ora, 5);
@@ -226,9 +247,11 @@ static bool loadSchedulerFromFs(String &errorMessage) {
   return true;
 }
 
+// Valuta le regole correnti e invia i comandi quando è il momento giusto.
 static void evaluateScheduler() {
   DateTime now = Rtc.now();
   uint8_t day = dayOfWeekMonToSun(now);
+  uint8_t month = (uint8_t)now.month();
   int16_t minuteOfDay = (int16_t)(now.hour() * 60 + now.minute());
   int32_t weekMinute = (int32_t)((day - 1) * 1440 + minuteOfDay);
 
@@ -238,7 +261,7 @@ static void evaluateScheduler() {
   LastEvaluatedWeekMinute = weekMinute;
 
   for (uint16_t i = 0; i < Scheduler.OutputCount; i++) {
-    str_b &out = Scheduler.Outputs[i];
+    str_group &out = Scheduler.Outputs[i];
 
     if (!out.Enabled || out.Name[0] == '\0') {
       continue;
@@ -246,7 +269,7 @@ static void evaluateScheduler() {
 
     int16_t winner = -1;
     for (uint16_t r = 0; r < out.RuleCount; r++) {
-      str_a &rule = out.Rules[r];
+      str_device &rule = out.Rules[r];
       if (!rule.Enabled) {
         continue;
       }
@@ -255,7 +278,11 @@ static void evaluateScheduler() {
         continue;
       }
 
-      if (!dayInRange(day, rule.Validita_Start, rule.Validita_End)) {
+      if (!monthInRange(month, rule.Validita_Start, rule.Validita_End)) {
+        continue;
+      }
+
+      if (!weekdayEnabled(day, rule.WeekdayMask)) {
         continue;
       }
 
@@ -264,7 +291,7 @@ static void evaluateScheduler() {
     }
 
     if (winner >= 0) {
-      str_a &rule = out.Rules[winner];
+      str_device &rule = out.Rules[winner];
       if (rule.LastExecutedWeekMinute != weekMinute) {
         sendOutputCommand(out.Name, rule.ON_or_OFF);
         rule.LastExecutedWeekMinute = weekMinute;
@@ -273,6 +300,7 @@ static void evaluateScheduler() {
   }
 }
 
+// Mantiene attiva la connessione Wi-Fi STA e riavvia il tentativo se serve.
 static void ensureWifiConnected() {
   if (WiFi.isConnected()) {
     return;
@@ -291,6 +319,7 @@ static void ensureWifiConnected() {
   }
 }
 
+// Registra gli endpoint HTTP per stato, regole e ricarica del scheduler.
 static void setupHttp() {
   Server.on("/", HTTP_GET, []() {
     String html;
@@ -357,6 +386,7 @@ static void setupHttp() {
   Server.begin();
 }
 
+// Inizializza hardware, Wi-Fi, RTC, filesystem e scheduler all'avvio.
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -393,6 +423,7 @@ void setup() {
   Serial.println("Centralina scheduler pronta");
 }
 
+// Esegue il ciclo principale di servizio Wi-Fi e valutazione delle regole.
 void loop() {
   ensureWifiConnected();
   Server.handleClient();

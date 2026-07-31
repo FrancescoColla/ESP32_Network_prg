@@ -27,15 +27,16 @@ La centralina avvia anche un AP locale (fallback):
 - Password: `87654321`
 
 ## Strutture logiche
-### str_a (regola)
+### str_device (regola)
 Campi nel JSON:
 - `Enabled` (bool)
-- `Validita_Start` (1..7, 1=lun, 7=dom)
-- `Validita_End` (1..7, 1=lun, 7=dom)
+- `Validita_Start` (1..12, 1=gen, 12=dic)
+- `Validita_End` (1..12, 1=gen, 12=dic)
+- `WeekdayMask` (bitmask dei giorni della settimana, 0x7F = tutti i giorni)
 - `Ora_Attivazione` (`HH:MM`)
 - `ON_or_OFF` (`ON` oppure `OFF`)
 
-### str_b (uscita)
+### str_group (uscita)
 Campi nel JSON:
 - `Name` (string, nome uscita)
 - `Enabled` (bool)
@@ -57,15 +58,17 @@ Campi nel JSON:
       "rules": [
         {
           "Enabled": true,
-          "Validita_Start": 1,
-          "Validita_End": 5,
+          "Validita_Start": 6,
+          "Validita_End": 9,
+          "WeekdayMask": 127,
           "Ora_Attivazione": "18:30",
           "ON_or_OFF": "ON"
         },
         {
           "Enabled": true,
-          "Validita_Start": 1,
-          "Validita_End": 5,
+          "Validita_Start": 6,
+          "Validita_End": 9,
+          "WeekdayMask": 127,
           "Ora_Attivazione": "23:30",
           "ON_or_OFF": "OFF"
         }
