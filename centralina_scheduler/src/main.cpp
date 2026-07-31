@@ -8,8 +8,11 @@
 
 static const uint16_t HTTP_SERVER_PORT = 80;
 static const uint16_t UDP_WORK_PORT = 54324;
+static const uint16_t UDP_SETUP_PORT = 54323;
 static const char *SCHEDULER_FILE = "/scheduler.json";
 static const uint16_t OUTPUT_NAME_MAX = 20;
+static const unsigned long CMD_RETRY_INTERVAL_MS = 5000UL;
+static const unsigned long CMD_TIMEOUT_MS = 15000UL;
 
 // Configura qui le credenziali STA della rete domotica.
 static const char *WIFI_STA_SSID = "";
@@ -23,6 +26,11 @@ struct str_device {
   uint8_t WeekdayMask = 0x7F;  // bit0=lun ... bit6=dom, 0x7F = tutti i giorni
   char Ora_Attivazione[6] = {0}; // HH:MM
   bool ON_or_OFF = false;       // true=ON, false=OFF
+
+  uint8_t SendCmd = 0; // Bit comando pendente: 1=da ritrasmettere fino ad ack/timeout
+  bool PendingCommandState = false;
+  unsigned long SendCmdStartMs = 0;
+  unsigned long LastCmdSendMs = 0;
 
   int16_t Ora_Minutes = -1;     // cache runtime 0..1439
   int32_t LastExecutedWeekMinute = -1;
@@ -41,6 +49,7 @@ struct scheduler_config_t {
 } Scheduler;
 
 WiFiUDP Udp;
+WiFiUDP UdpSetup;
 WebServer Server(HTTP_SERVER_PORT);
 RTC_DS3231 Rtc;
 
@@ -151,6 +160,120 @@ static void sendOutputCommand(const char *outputName, bool turnOn) {
   Serial.println(tx);
 }
 
+// Attiva il bit send_cmd del device e invia subito il comando da confermare.
+static void armOutputCommand(str_device &rule, const char *outputName, bool turnOn) {
+  rule.SendCmd = 1;
+  rule.PendingCommandState = turnOn;
+  rule.SendCmdStartMs = millis();
+  rule.LastCmdSendMs = rule.SendCmdStartMs;
+
+  sendOutputCommand(outputName, turnOn);
+}
+
+// Testa i comandi pendenti: retry ogni 5s e stop automatico dopo timeout.
+static void processPendingCommands() {
+  unsigned long nowMs = millis();
+
+  for (uint16_t i = 0; i < Scheduler.OutputCount; i++) {
+    str_group &out = Scheduler.Outputs[i];
+    for (uint16_t r = 0; r < out.RuleCount; r++) {
+      str_device &rule = out.Rules[r];
+      if (rule.SendCmd == 0) {
+        continue;
+      }
+
+      if ((unsigned long)(nowMs - rule.SendCmdStartMs) >= CMD_TIMEOUT_MS) {
+        rule.SendCmd = 0;
+        Serial.print("CMD timeout: ");
+        Serial.print(out.Name);
+        Serial.print(" r=");
+        Serial.println((int)r);
+        continue;
+      }
+
+      if ((unsigned long)(nowMs - rule.LastCmdSendMs) >= CMD_RETRY_INTERVAL_MS) {
+        sendOutputCommand(out.Name, rule.PendingCommandState);
+        rule.LastCmdSendMs = nowMs;
+        Serial.print("CMD retry: ");
+        Serial.print(out.Name);
+        Serial.print(" r=");
+        Serial.println((int)r);
+      }
+    }
+  }
+}
+
+// Elabora il payload <05&Name;State!Name2;State...> per riconoscere l'ack dello stato.
+static void applyStatusFeedback(char *payload) {
+  if (payload == nullptr || payload[0] == '\0') {
+    return;
+  }
+
+  char *savePtr = nullptr;
+  char *token = strtok_r(payload, "!", &savePtr);
+  while (token != nullptr) {
+    char *sep = strchr(token, ';');
+    if (sep != nullptr) {
+      *sep = '\0';
+      const char *name = token;
+      char stateChar = *(sep + 1);
+      bool state = (stateChar == '1');
+
+      for (uint16_t i = 0; i < Scheduler.OutputCount; i++) {
+        str_group &out = Scheduler.Outputs[i];
+        if (strcmp(out.Name, name) != 0) {
+          continue;
+        }
+
+        for (uint16_t r = 0; r < out.RuleCount; r++) {
+          str_device &rule = out.Rules[r];
+          if (rule.SendCmd == 0) {
+            continue;
+          }
+
+          if (rule.PendingCommandState == state) {
+            rule.SendCmd = 0;
+            Serial.print("CMD ack: ");
+            Serial.print(out.Name);
+            Serial.print(" r=");
+            Serial.println((int)r);
+          }
+        }
+      }
+    }
+
+    token = strtok_r(nullptr, "!", &savePtr);
+  }
+}
+
+// Riceve i broadcast di stato delle uscite e chiude i comandi pendenti confermati.
+static void processStatusFeedbackPackets() {
+  int packetSize = UdpSetup.parsePacket();
+  while (packetSize > 0) {
+    char rx[256] = {0};
+    int toRead = packetSize;
+    if (toRead > (int)(sizeof(rx) - 1)) {
+      toRead = (int)sizeof(rx) - 1;
+    }
+
+    int readed = UdpSetup.read((uint8_t *)rx, toRead);
+    if (readed > 0) {
+      rx[readed] = '\0';
+
+      if (strncmp(rx, "<05&", 4) == 0) {
+        char *payload = rx + 4;
+        char *end = strchr(payload, '>');
+        if (end != nullptr) {
+          *end = '\0';
+        }
+        applyStatusFeedback(payload);
+      }
+    }
+
+    packetSize = UdpSetup.parsePacket();
+  }
+}
+
 // Legge il contenuto raw del file delle regole dalla LittleFS.
 static String readRulesRaw() {
   if (!LittleFS.exists(SCHEDULER_FILE)) {
@@ -240,6 +363,10 @@ static bool loadSchedulerFromFs(String &errorMessage) {
         }
         Scheduler.Outputs[i].Rules[r].Ora_Minutes = minuteCache;
         Scheduler.Outputs[i].Rules[r].LastExecutedWeekMinute = -1;
+        Scheduler.Outputs[i].Rules[r].SendCmd = 0;
+        Scheduler.Outputs[i].Rules[r].PendingCommandState = false;
+        Scheduler.Outputs[i].Rules[r].SendCmdStartMs = 0;
+        Scheduler.Outputs[i].Rules[r].LastCmdSendMs = 0;
       }
     }
   }
@@ -267,7 +394,6 @@ static void evaluateScheduler() {
       continue;
     }
 
-    int16_t winner = -1;
     for (uint16_t r = 0; r < out.RuleCount; r++) {
       str_device &rule = out.Rules[r];
       if (!rule.Enabled) {
@@ -286,14 +412,8 @@ static void evaluateScheduler() {
         continue;
       }
 
-      // Ultima regola valida nell'array vince.
-      winner = (int16_t)r;
-    }
-
-    if (winner >= 0) {
-      str_device &rule = out.Rules[winner];
       if (rule.LastExecutedWeekMinute != weekMinute) {
-        sendOutputCommand(out.Name, rule.ON_or_OFF);
+        armOutputCommand(rule, out.Name, rule.ON_or_OFF);
         rule.LastExecutedWeekMinute = weekMinute;
       }
     }
@@ -411,6 +531,7 @@ void setup() {
   }
 
   Udp.begin(UDP_WORK_PORT);
+  UdpSetup.begin(UDP_SETUP_PORT);
 
   String err;
   if (!loadSchedulerFromFs(err)) {
@@ -426,6 +547,8 @@ void setup() {
 // Esegue il ciclo principale di servizio Wi-Fi e valutazione delle regole.
 void loop() {
   ensureWifiConnected();
+  processStatusFeedbackPackets();
+  processPendingCommands();
   Server.handleClient();
 
   if (millis() - LastSchedulerTickMs >= 1000UL) {
