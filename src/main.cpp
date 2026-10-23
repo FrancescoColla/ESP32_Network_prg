@@ -13,6 +13,9 @@
 #include <BluetoothSerial.h>
 #include <Bit_Utils.h>
 #include <WebServer.h>
+#ifdef ENABLE_OTA
+#include <ArduinoOTA.h>
+#endif
 
 static const uint16_t HTTP_SERVER_PORT = 80;
 static const size_t MAX_LOG_BUFFER_SIZE = 2048;
@@ -1141,11 +1144,32 @@ void io_gest() {
 }
 #pragma endregion **IO **
 
+#ifdef ENABLE_OTA
+static void ota_init() {
+  ArduinoOTA.setHostname("ESP32_Network");
+  ArduinoOTA.setPassword("87654321_OTA");
+  ArduinoOTA.onStart([]() {
+    log_add("OTA update started\n");
+  });
+  ArduinoOTA.onEnd([]() {
+    log_add("OTA update completed\n");
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    log_add(String("OTA update error: ") + String(static_cast<int>(error)) + "\n");
+  });
+  ArduinoOTA.begin();
+  log_add("OTA ready at 192.168.100.1\n");
+}
+#endif
+
 void setup() {
   Serial.begin(115200);
   delay(200);
   
   _WiFi.AP_Init(_soft_ap_password);
+#ifdef ENABLE_OTA
+  ota_init();
+#endif
   HTTP_Init_Events();
   server.begin();
 
@@ -1223,6 +1247,9 @@ void loop() {
     }
   }
 
+#ifdef ENABLE_OTA
+  ArduinoOTA.handle();
+#endif
   server.handleClient();
 
   if (TimeElapsed(time_udp_work) > 10) {
