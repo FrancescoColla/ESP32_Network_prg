@@ -768,7 +768,6 @@ void udp_setup_receive() {
             Board_Config.qx[i].type = 1;
           }
           tx.concat(String(Board_Config.qx[i].type)); tx.concat(",");
-          if (Board_Config.qx[i].timeout < 0) Board_Config.qx[i].timeout = 0;
           tx.concat(String(Board_Config.qx[i].timeout));
           if (i < QX_COUNT - 1) tx.concat("!");
         }
@@ -1166,13 +1165,6 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   
-  _WiFi.AP_Init(_soft_ap_password);
-#ifdef ENABLE_OTA
-  ota_init();
-#endif
-  HTTP_Init_Events();
-  server.begin();
-
   if (EEPROM.begin(788)) {
     log_add("Ok to initialise EEPROM\n");
   } else {
@@ -1181,6 +1173,13 @@ void setup() {
 
   EEPROM_Read();
   gpioConfig();
+
+  _WiFi.AP_Init(_soft_ap_password, Board_Config.myname);
+#ifdef ENABLE_OTA
+  ota_init();
+#endif
+  HTTP_Init_Events();
+  server.begin();
 
   _WiFi.Disconnect();
   delay(100);

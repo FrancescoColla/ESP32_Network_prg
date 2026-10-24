@@ -24,7 +24,7 @@
         MyWiFi ();
         ~MyWiFi ();
 
-        void AP_Init(char *Pwd) ;
+        void AP_Init(char *Pwd, char *Name);
 
         bool config(IPAddress Local_IP, IPAddress Gateway_IP, IPAddress Subnet_Mask, IPAddress DNS_1, IPAddress DNS_2);
 

@@ -1,7 +1,7 @@
 
 #include <MyWiFi.hpp>
 
-void MyWiFi::AP_Init(char *Pwd) 
+void MyWiFi::AP_Init(char *Pwd, char *Name)
 {
     Serial.println("PWD.Len");
     Serial.println( strlen(Pwd));
@@ -15,7 +15,10 @@ void MyWiFi::AP_Init(char *Pwd)
     subnet=IPAddress(255,255,255,0);
     WiFi.softAPConfig(local_ip, gateway, subnet);
 
-    WiFi.softAP(WiFi.macAddress().c_str(), "87654321");
+    String mac = WiFi.macAddress();
+    String ssid = strlen(Name) > 0 ? String("net_" + String(Name)) : String("network");
+    ssid += "_" + mac.substring(mac.length() - 2);
+    WiFi.softAP(ssid.c_str(), "87654321");
     delay(100);
 
     Serial.println("WiFi Initialized");
@@ -26,11 +29,6 @@ void MyWiFi::AP_Init(char *Pwd)
 
 String MyWiFi::macAddress()
     {
-                uint8_t mac[6];
-        /*WiFi.macAddress(mac);
-        Serial.print("mac: ");
-        Serial.println(mac[5]);*/
-
         return WiFi.macAddress().c_str(); }
 
 MyWiFi::MyWiFi(){}
@@ -282,5 +280,4 @@ IPAddress MyWiFi::ap_LocalIP()
 
 IPAddress MyWiFi::ap_BroadcastIP()
     {return WiFi.softAPBroadcastIP();}    
-
 
